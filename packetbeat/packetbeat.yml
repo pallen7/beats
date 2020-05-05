@@ -11,12 +11,13 @@
 
 # Select the network interface to sniff the data. On Linux, you can use the
 # "any" keyword to sniff on all connected interfaces.
-packetbeat.interfaces.device: any
+packetbeat.interfaces.device: 8
 
 #================================== Flows =====================================
 
 # Set `enabled: false` or comment out all options to disable flows reporting.
 packetbeat.flows:
+  enabled: false
   # Set network flow timeout. Flow is killed if no packet is received before being
   # timed out.
   timeout: 30s
@@ -27,79 +28,82 @@ packetbeat.flows:
 #========================== Transaction protocols =============================
 
 packetbeat.protocols:
-- type: icmp
-  # Enable ICMPv4 and ICMPv6 monitoring. Default: false
-  enabled: true
+# - type: icmp
+#   # Enable ICMPv4 and ICMPv6 monitoring. Default: false
+#   enabled: true
 
-- type: amqp
-  # Configure the ports where to listen for AMQP traffic. You can disable
-  # the AMQP protocol by commenting out the list of ports.
-  ports: [5672]
+# - type: amqp
+#   # Configure the ports where to listen for AMQP traffic. You can disable
+#   # the AMQP protocol by commenting out the list of ports.
+#   ports: [5672]
 
-- type: cassandra
-  #Cassandra port for traffic monitoring.
-  ports: [9042]
+# - type: cassandra
+#   #Cassandra port for traffic monitoring.
+#   ports: [9042]
 
-- type: dhcpv4
-  # Configure the DHCP for IPv4 ports.
-  ports: [67, 68]
+# - type: dhcpv4
+#   # Configure the DHCP for IPv4 ports.
+#   ports: [67, 68]
 
-- type: dns
-  # Configure the ports where to listen for DNS traffic. You can disable
-  # the DNS protocol by commenting out the list of ports.
-  ports: [53]
+# - type: dns
+#   # Configure the ports where to listen for DNS traffic. You can disable
+#   # the DNS protocol by commenting out the list of ports.
+#   ports: [53]
 
-- type: http
-  # Configure the ports where to listen for HTTP traffic. You can disable
-  # the HTTP protocol by commenting out the list of ports.
-  ports: [80, 8080, 8000, 5000, 8002]
+# - type: http
+#   # Configure the ports where to listen for HTTP traffic. You can disable
+#   # the HTTP protocol by commenting out the list of ports.
+#   ports: [80, 8080, 8000, 5000, 8002]
 
-- type: memcache
-  # Configure the ports where to listen for memcache traffic. You can disable
-  # the Memcache protocol by commenting out the list of ports.
-  ports: [11211]
+# - type: memcache
+#   # Configure the ports where to listen for memcache traffic. You can disable
+#   # the Memcache protocol by commenting out the list of ports.
+#   ports: [11211]
 
-- type: mysql
-  # Configure the ports where to listen for MySQL traffic. You can disable
-  # the MySQL protocol by commenting out the list of ports.
-  ports: [3306,3307]
+# - type: mysql
+#   # Configure the ports where to listen for MySQL traffic. You can disable
+#   # the MySQL protocol by commenting out the list of ports.
+#   ports: [3306,3307]
 
-- type: pgsql
-  # Configure the ports where to listen for Pgsql traffic. You can disable
-  # the Pgsql protocol by commenting out the list of ports.
-  ports: [5432]
+# - type: pgsql
+#   # Configure the ports where to listen for Pgsql traffic. You can disable
+#   # the Pgsql protocol by commenting out the list of ports.
+#   ports: [5432]
 
-- type: redis
-  # Configure the ports where to listen for Redis traffic. You can disable
-  # the Redis protocol by commenting out the list of ports.
-  ports: [6379]
+# - type: redis
+#   # Configure the ports where to listen for Redis traffic. You can disable
+#   # the Redis protocol by commenting out the list of ports.
+#   ports: [6379]
 
-- type: thrift
-  # Configure the ports where to listen for Thrift-RPC traffic. You can disable
-  # the Thrift-RPC protocol by commenting out the list of ports.
-  ports: [9090]
+# - type: thrift
+#   # Configure the ports where to listen for Thrift-RPC traffic. You can disable
+#   # the Thrift-RPC protocol by commenting out the list of ports.
+#   ports: [9090]
 
-- type: mongodb
-  # Configure the ports where to listen for MongoDB traffic. You can disable
-  # the MongoDB protocol by commenting out the list of ports.
-  ports: [27017]
+# - type: mongodb
+#   # Configure the ports where to listen for MongoDB traffic. You can disable
+#   # the MongoDB protocol by commenting out the list of ports.
+#   ports: [27017]
 
-- type: nfs
-  # Configure the ports where to listen for NFS traffic. You can disable
-  # the NFS protocol by commenting out the list of ports.
-  ports: [2049]
+# - type: nfs
+#   # Configure the ports where to listen for NFS traffic. You can disable
+#   # the NFS protocol by commenting out the list of ports.
+#   ports: [2049]
 
-- type: tls
-  # Configure the ports where to listen for TLS traffic. You can disable
-  # the TLS protocol by commenting out the list of ports.
-  ports:
-    - 443   # HTTPS
-    - 993   # IMAPS
-    - 995   # POP3S
-    - 5223  # XMPP over SSL
-    - 8443
-    - 8883  # Secure MQTT
-    - 9243  # Elasticsearch
+- type: tds
+  ports: [1433]
+
+# - type: tls
+#   # Configure the ports where to listen for TLS traffic. You can disable
+#   # the TLS protocol by commenting out the list of ports.
+#   ports:
+#     - 443   # HTTPS
+#     - 993   # IMAPS
+#     - 995   # POP3S
+#     - 5223  # XMPP over SSL
+#     - 8443
+#     - 8883  # Secure MQTT
+#     - 9243  # Elasticsearch
 
 #==================== Elasticsearch template setting ==========================
 
@@ -211,7 +215,7 @@ processors:
 
 # Sets log level. The default log level is info.
 # Available log levels are: error, warning, info, debug
-#logging.level: debug
+# logging.level: debug
 
 # At debug level, you can selectively enable logging only for some components.
 # To enable all selectors use ["*"]. Examples of other selectors are "beat",
@@ -222,7 +226,6 @@ processors:
 # packetbeat can export internal metrics to a central Elasticsearch monitoring
 # cluster.  This requires xpack monitoring to be enabled in Elasticsearch.  The
 # reporting is disabled by default.
-
 # Set to true to enable the monitoring reporter.
 #monitoring.enabled: false
 
