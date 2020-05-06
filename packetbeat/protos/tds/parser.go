@@ -1,6 +1,7 @@
 package tds
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -32,7 +33,7 @@ type message struct {
 	// list element use by 'transactions' for correlation
 	next *message
 
-	// todo: not sure if this needs to live somewhere else?
+	// neaten this up:
 	requestType string
 }
 
@@ -120,24 +121,27 @@ func (p *parser) parse() (*message, error) {
 	The packet header precedes all data within the packet. It is always 8 bytes in length.
 	Most importantly, the packet header states the Type and Length of the entire packet. */
 
+	/*
+		Packet data for a given message follows the packet header (see Type in section 2.2.3.1.1 for messages that contain packet data).
+		As previously stated, a message can span more than one packet. Because each new message MUST always begin within a new packet,
+		a message that spans more than one packet only occurs if the data to be sent exceeds the maximum packet data size,
+		which is computed as (negotiated packet size - 8 bytes), where the 8 bytes represents the size of the packet header.
+	*/
+
+	// Byte	Usage
+	// 1	Type
+	// 2	Status
+	// 3,4	Length
+	// 5,6	SPID
+	// 7	PacketId -- currently ignored (might be worth parsing)
+	// 8	Unused
+
 	// Split out a function to process the packet header?
 
 	msg := p.message
-	// Empty buffer - do nothing (should we wait for 8 bytes?)
-	if p.buf.Len() < 2 {
+	// Empty buffer - need to decide what to do here
+	if p.buf.Len() < 8 {
 		logp.Info("* Empty(ish) buffer")
-		return nil, errors.New("Empty buffer")
-	}
-
-	// Second byte dictates whether this is the end of the message
-	status, err := p.buf.PeekByteFrom(1)
-	if err != nil {
-		return nil, err
-	}
-
-	if status&0x01 != 0x01 {
-		// Not end of message so crack on - no error to return though
-		logp.Info("* Not end of message")
 		return nil, nil
 	}
 
@@ -164,13 +168,39 @@ func (p *parser) parse() (*message, error) {
 		session is enlisted. This status bit MUST NOT be set in conjunction with the RESETCONNECTION bit.
 		Otherwise identical to RESETCONNECTION.
 	*/
+
+	// Second byte dictates whether this is the end of the message
+	header := make([]byte, 8)
+	if _, err := p.buf.Read(header); err != nil {
+		return nil, err
+	}
+
+	// Parse header values
+	batchType := header[0]
+	status := header[1]
+	packetSize := binary.BigEndian.Uint16(header[2:4])
+	spid := binary.BigEndian.Uint16(header[4:6])
+
+	if status&0x01 != 0x01 {
+		// Need to understand what to do here
+		logp.Info("* Not end of message")
+		return nil, fmt.Errorf("Not end of message -> still to implement")
+	}
+
+	if status&0x02 == 0x02 && status&0x01 == 0x01 {
+		// Ignore message
+		logp.Info("* Ignore message")
+		return nil, fmt.Errorf("Ignore message")
+	}
+
+	// Need to understand what to do if we receive 0x08
+
 	logp.Info("* Processing end of message")
 
-	batchType, err := p.buf.PeekByteFrom(0)
-
+	// Change the below to StreamName to match spec?
 	switch batchType {
 	case 0x01:
-		msg.requestType = "SQL Batch"
+		msg.requestType = "SQLBatch"
 		msg.IsRequest = true
 	case 0x02:
 		msg.requestType = "Pre-TDS7 Login"
@@ -179,6 +209,7 @@ func (p *parser) parse() (*message, error) {
 		msg.requestType = "RPC"
 		msg.IsRequest = true
 	case 0x04:
+		// NB: not really a request type
 		msg.requestType = "Tabular result"
 		msg.IsRequest = false
 	// case 0x05:
@@ -212,7 +243,17 @@ func (p *parser) parse() (*message, error) {
 		return nil, fmt.Errorf("Unrecognised TDS Type")
 	}
 
-	// As we have only peeked at the buffer we need to advance so that a reset clears the buffer
+	data := make([]byte, p.buf.Len())
+	if _, err := p.buf.Read(data); err != nil {
+		return msg, err
+	}
+
+	logp.Info("** packetSize: %d", packetSize)
+	logp.Info("** spid: %d", spid)
+	logp.Info("** requestType: %s", msg.requestType)
+	logp.Info("** data: %s", data)
+
+	// Mark buffer as read (even if it's not)
 	p.buf.Advance(p.buf.Len())
 
 	return msg, nil
