@@ -73,9 +73,9 @@ var (
 
 // token types
 const (
-	altMetadataToken        = 0x88 // (variable columns)
+	altMetadataToken        = 0x88 // (variable count)
 	altRowToken             = 0xd3 // (zero length)
-	colMetadataToken        = 0x81 // (variable columns)
+	colMetadataToken        = 0x81 // (variable count)
 	colInfoToken            = 0xa5 // (variable length)
 	dataClassificationToken = 0xa3 // (variable length) (introduced in tds 7.4)
 	doneToken               = 0xfd // (fixed length)
@@ -300,11 +300,11 @@ func (p *parser) parse() (*message, error) {
 
 		switch tokenType {
 		case altMetadataToken:
-			logp.Info("** altMetadataToken %v", tokenType)
+			logp.Info("** altMetadataToken 0x%x", tokenType)
 		case altRowToken:
-			logp.Info("** altRowToken %v", tokenType)
+			logp.Info("** altRowToken 0x%x", tokenType)
 		case colMetadataToken:
-			logp.Info("** colMetadataToken %v", tokenType)
+			logp.Info("** colMetadataToken 0x%x", tokenType)
 
 			// Column Count USHORT (unsigned 2 byte int)
 			cCount := make([]byte, 2)
@@ -313,6 +313,17 @@ func (p *parser) parse() (*message, error) {
 			}
 			columnCount := binary.LittleEndian.Uint16(cCount)
 			logp.Info("** Column Count: %d", columnCount)
+
+			// CekTable???? -->
+			cCekTable := make([]byte, 2)
+			if _, err := p.buf.Read(cCekTable); err != nil {
+				return msg, err
+			}
+			logp.Info("** cekTable?: x%x", cCekTable)
+
+			if err := parseColumnMetadata(p, int(columnCount)); err != nil {
+				return msg, err
+			}
 
 		case colInfoToken:
 			logp.Info("** colInfoToken %v", tokenType)
@@ -405,4 +416,146 @@ func (p *parser) parse() (*message, error) {
 	p.buf.Advance(p.buf.Len())
 
 	return msg, nil
+}
+
+func parseColumnMetadata(p *parser, columnCount int) error {
+
+	for i := 0; i < columnCount; i++ {
+
+		/* UserType:
+		The user type ID of the data type of the column. Depending on the TDS version that is used, valid values are 0x0000 or 0x00000000,
+		with the exceptions of data type TIMESTAMP (0x0050 or 0x00000050) and alias types (greater than 0x00FF or 0x000000FF).
+		*/
+		uType := make([]byte, 4)
+		if _, err := p.buf.Read(uType); err != nil {
+			return err
+		}
+		logp.Info("** UserType: 0x%x", uType)
+
+		/* Flags:
+		The size of the Flags parameter is always fixed at 16 bits regardless of the TDS version.
+		Each of the 16 bits of the Flags parameter is interpreted based on the TDS version negotiated during login.
+		Bit flags, in least significant bit order (FLAGRULE = F0 F1 F2 F3 F4 F5 F6 F7 : would be observed on the wire in the natural value order F7F6F5F4F3F2F1F0)
+
+		So the wire value order is: (actually this might be the wrong way round)
+		DOUBLE CHECK THE SPEC ON THE BELOW... Confusing
+		18:		fNullableUnknown is a bit flag. Its value is 1 if it is unknown whether the column might be nullable.
+		17:		fKey is a bit flag. Its value is 1 if the column is part of a primary key for the row and the T-SQL SELECT statement contains FOR BROWSE.
+		16:		fHidden is a bit flag. Its value is 1 if the column is part of a hidden primary key created to support a T-SQL SELECT statement
+				containing FOR BROWSE.<37>
+		12-15:	uReserved (4-bit)
+		11:		fFixedLenCLRType is a bit flag. Its value is 1 if the column is a fixed-length common language runtime user-defined type (CLR UDT).
+		10:		usReserverd3
+		9:		fEncrypted is a bit flag. Its value is 1 if the column is encrypted transparently and has to be decrypted to view the plaintext value. This flag is valid when the column encryption feature is negotiated between client and server and is turned on.
+		8:		fSparseColumnSet, introduced in TDS version 7.3.B, is a bit flag. Its value is 1 if the column is the special XML column for the sparse column set. For information about using column sets, see [MSDN-ColSets].
+		8:      fFixedLenCLRType
+		6-7:	usReservedODBC is a 2-bit field that is used by ODS gateways supporting the ODBC ODS gateway driver.
+		5: 		fComputed is a bit flag. Its value is 1 if the column is a COMPUTED column.
+		4: 		fIdentity is a bit flag. Its value is 1 if the column is an identity column.
+		2-3:	usUpdateable is a 2-bit field. Its value is 0 if column is read-only, 1 if column is read/write and 2 if updateable is unknown.
+		1:		fCaseSen is a bit flag. Set to 1 for string columns with binary collation and always for the XML data type. Set to 0 otherwise
+		0:		fNullable is a bit flag. Its value is 1 if the column is nullable
+		*/
+		flags := make([]byte, 2)
+		if _, err := p.buf.Read(flags); err != nil {
+			return err
+		}
+
+		logp.Info("** flags: 0x%x", flags)
+
+		// if i == 0 {
+		// 	// Type BYTE - NumParts (Don't think this is numParts. This is the datatype for varchars (167))
+		// 	numParts, err := p.buf.ReadByte()
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	logp.Info("** numParts: 0x%x", numParts)
+
+		// 	/* US_VARCHAR = USHORTLEN *CHAR
+		// 	   USHORTLEN = An unsigned 2-byte (16-bit) value representing the length of the associated data. The range is 0 to 65535.
+		// 	Variable-length character streams are defined by a length field followed by the data itself. There are two types of variable-length character streams,
+		// 	each dependent on the size of the length field (for example, a BYTE or USHORT). If the length field is zero, then no data follows the length field.
+		// 	Note that the lengths of B_VARCHAR and US_VARCHAR are given in Unicode characters.
+		// 	*/
+
+		// 	// NOTE: If the below is anything other than 0 we need to be reading the TableName
+		// 	partNameLength, err := p.buf.ReadByte()
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	if partNameLength != 0 {
+		// 		return fmt.Errorf("Not Implemented: Received table name and unable to parse")
+		// 	}
+		// 	logp.Info("** partNameLength: 0x%x", partNameLength)
+		// }
+
+		// [CryptoMetaData] -? Optional - read up about this
+
+		// DataType:
+		/*
+			NULLTYPE = %x1F ; Null INT1TYPE = %x30 ; TinyInt BITTYPE = %x32 ; Bit INT2TYPE = %x34 ; SmallInt INT4TYPE = %x38 ; Int DATETIM4TYPE = %x3A ; SmallDateTime FLT4TYPE = %x3B ; Real MONEYTYPE = %x3C ; Money DATETIMETYPE = %x3D ; DateTime FLT8TYPE = %x3E ; Float MONEY4TYPE = %x7A ; SmallMoney INT8TYPE = %x7F ; BigInt
+		*/
+		dataType, err := p.buf.ReadByte()
+		if err != nil {
+			return err
+		}
+		logp.Info("** dataType: 0x%x", dataType)
+
+		switch dataType {
+		case 0x38: // INT32
+			// ColName = B_VARCHAR
+			// Byte representing the length followed by the column name
+			cNameLength, err := p.buf.ReadByte()
+			if err != nil {
+				return err
+			}
+			logp.Info("** cNameLength: 0x%x", cNameLength)
+
+			cName := make([]byte, cNameLength*2)
+			if _, err := p.buf.Read(cName); err != nil {
+				return err
+			}
+
+			logp.Info("** cName: 0x%x, len: %d", cName, len(cName))
+
+			r := bytes.NewReader(cName)
+			x := make([]uint16, len(cName)/2)
+			binary.Read(r, binary.LittleEndian, x)
+			logp.Info("** x: %v len: %d", x, len(x))
+			logp.Info("** column name: %s", string(utf16.Decode(x)))
+		case 0xa7: // varchar
+			// ignore 7 bytes (think this is collation - dig further)
+			ignore := make([]byte, 7)
+			if _, err := p.buf.Read(ignore); err != nil {
+				return err
+			}
+			logp.Info("** ignore: 0x%x", ignore)
+
+			// ColName = B_VARCHAR
+			// Byte representing the length followed by the column name
+			cNameLength, err := p.buf.ReadByte()
+			if err != nil {
+				return err
+			}
+			logp.Info("** cNameLength: 0x%x", cNameLength)
+
+			cName := make([]byte, cNameLength*2)
+			if _, err := p.buf.Read(cName); err != nil {
+				return err
+			}
+
+			logp.Info("** cName: 0x%x, len: %d", cName, len(cName))
+
+			r := bytes.NewReader(cName)
+			x := make([]uint16, len(cName)/2)
+			binary.Read(r, binary.LittleEndian, x)
+			logp.Info("** x: %v len: %d", x, len(x))
+			logp.Info("** column name: %s", string(utf16.Decode(x)))
+		default:
+			return fmt.Errorf("Unhandled data type: x%x", dataType)
+		}
+
+	}
+
+	return nil
 }
