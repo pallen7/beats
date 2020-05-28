@@ -13,6 +13,10 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
+type columnMetadata struct {
+	dataType byte
+}
+
 type parser struct {
 	buf     streambuf.Buffer
 	config  *parserConfig
@@ -98,6 +102,54 @@ const (
 	tabNameToken            = 0xa4 // (variable length)
 )
 
+const (
+	// fixed length data types:
+	nulltype     = 0x1f
+	int1type     = 0x30
+	bittype      = 0x32
+	int2type     = 0x34
+	int4type     = 0x38
+	datetim4type = 0x3a
+	flt4type     = 0x3b
+	moneytype    = 0x3c
+	datetimetype = 0x3d
+	flt8type     = 0x3e
+	money4type   = 0x7a
+	int8type     = 0x7f
+
+	// variable length data types:
+	guidtype            = 0x24
+	intntype            = 0x26
+	decimaltype         = 0x37
+	numerictype         = 0x3f
+	bitntype            = 0x68
+	decimalntype        = 0x6a
+	numericntype        = 0x6c
+	fltntype            = 0x6d
+	moneyntype          = 0x6e
+	datetimntype        = 0x6f
+	datentype           = 0x28
+	timentype           = 0x29
+	datetime2ntype      = 0x2a
+	datetimeoffsetntype = 0x2b
+	chartype            = 0x2f
+	varchartype         = 0x27
+	binarytype          = 0x2d
+	varbinarytype       = 0x25
+	bigvarbinarytype    = 0xa5
+	bigvarchartype      = 0xa7
+	bigbinarytype       = 0xad
+	bigchartype         = 0xaf
+	nvarchartype        = 0xe7
+	nchartype           = 0xef
+	xmltype             = 0xf1
+	udttype             = 0xf0
+	texttype            = 0x23
+	imagetype           = 0x22
+	ntexttype           = 0x63
+	ssvarianttype       = 0x62
+)
+
 func (p *parser) init(
 	cfg *parserConfig,
 	onMessage func(*message) error,
@@ -138,6 +190,12 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 		msg, err := p.parse()
 		if err != nil {
 			logp.Info("** parse returned error: %s", err)
+
+			// Read the rest of the buffer data - no need to check for errors
+			data := make([]byte, p.buf.Len())
+			p.buf.Read(data)
+			logp.Info("** remaining data in buffer: %v", data)
+
 			return err
 		}
 		if msg == nil {
@@ -293,91 +351,297 @@ func (p *parser) parse() (*message, error) {
 		msg.requestType = "Tabular result"
 		msg.IsRequest = false
 
-		tokenType, err := p.buf.ReadByte()
-		if err != nil {
-			return msg, err
-		}
+		var colMeta []columnMetadata
 
-		switch tokenType {
-		case altMetadataToken:
-			logp.Info("** altMetadataToken 0x%x", tokenType)
-		case altRowToken:
-			logp.Info("** altRowToken 0x%x", tokenType)
-		case colMetadataToken:
-			logp.Info("** colMetadataToken 0x%x", tokenType)
-
-			// Column Count USHORT (unsigned 2 byte int)
-			cCount := make([]byte, 2)
-			if _, err := p.buf.Read(cCount); err != nil {
-				return msg, err
-			}
-			columnCount := binary.LittleEndian.Uint16(cCount)
-			logp.Info("** Column Count: %d", columnCount)
-
-			// CekTable???? -->
-			cCekTable := make([]byte, 2)
-			if _, err := p.buf.Read(cCekTable); err != nil {
-				return msg, err
-			}
-			logp.Info("** cekTable?: x%x", cCekTable)
-
-			if err := parseColumnMetadata(p, int(columnCount)); err != nil {
+		for p.buf.Len() > 0 {
+			// We need to loop around the below and pull off each token as we go
+			tokenType, err := p.buf.ReadByte()
+			if err != nil {
 				return msg, err
 			}
 
-		case colInfoToken:
-			logp.Info("** colInfoToken %v", tokenType)
-		case dataClassificationToken:
-			logp.Info("** dataClassificationToken %v", tokenType)
-		case doneToken:
-			logp.Info("** doneToken %v", tokenType)
-		case doneProcToken:
-			logp.Info("** doneProcToken %v", tokenType)
-		case doneInProcToken:
-			logp.Info("** doneInProcToken %v", tokenType)
-		case envChangeToken:
-			logp.Info("** envChangeToken %v", tokenType)
-		case errorToken:
-			logp.Info("** errorToken %v", tokenType)
-		case featureExtackToken:
-			logp.Info("** featureExtackToken %v", tokenType)
-		case fedAuthInfoToken:
-			logp.Info("** fedAuthInfoToken %v", tokenType)
-		case infoToken:
-			logp.Info("** infoToken %v", tokenType)
-		case loginAckToken:
-			logp.Info("** loginAckToken %v", tokenType)
-		case nbcRowToken:
-			logp.Info("** nbcRowToken %v", tokenType)
-		case offsetToken:
-			logp.Info("** offsetToken %v", tokenType)
-		case orderToken:
-			logp.Info("** orderToken %v", tokenType)
-		case returnStatusToken:
-			logp.Info("** returnStatusToken %v", tokenType)
-		case returnValueToken:
-			logp.Info("** returnValueToken %v", tokenType)
-		case rowToken:
-			logp.Info("** rowToken %v", tokenType)
-		case sessionStateToken:
-			logp.Info("** sessionStateToken %v", tokenType)
-		case sspiToken:
-			logp.Info("** sspiToken %v", tokenType)
-		case tabNameToken:
-			logp.Info("** tabnameToken %v", tokenType)
-		default:
-			return msg, fmt.Errorf("Unrecognised Token")
+			switch tokenType {
+			case altMetadataToken:
+				return msg, fmt.Errorf("** Not Implemented: altMetadataToken 0x%x", tokenType)
+			case altRowToken:
+				return msg, fmt.Errorf("** Not Implemented: altRowToken 0x%x", tokenType)
+			case colMetadataToken:
+				logp.Info("** colMetadataToken 0x%x", tokenType)
+
+				// Column Count USHORT (unsigned 2 byte int)
+				cCount := make([]byte, 2)
+				if _, err := p.buf.Read(cCount); err != nil {
+					return msg, err
+				}
+				columnCount := binary.LittleEndian.Uint16(cCount)
+				logp.Info("** Column Count: %d", columnCount)
+
+				// CekTable???? -->
+				cCekTable := make([]byte, 2)
+				if _, err := p.buf.Read(cCekTable); err != nil {
+					return msg, err
+				}
+				logp.Info("** cekTable?: x%x", cCekTable)
+
+				if colMeta, err = parseColumnMetadata(p, int(columnCount)); err != nil {
+					return msg, err
+				}
+				logp.Info("** colMeta: %v", colMeta)
+
+			case colInfoToken:
+				return msg, fmt.Errorf("** Not Implemented: colInfoToken %v", tokenType)
+			case dataClassificationToken:
+				return msg, fmt.Errorf("** Not Implemented: dataClassificationToken %v", tokenType)
+			case doneToken:
+				// Revisit this - just skip to the end for the moment
+				p.buf.Advance(p.buf.Len())
+			case doneProcToken:
+				return msg, fmt.Errorf("** Not Implemented: doneProcToken %v", tokenType)
+			case doneInProcToken:
+				return msg, fmt.Errorf("** Not Implemented: doneInProcToken %v", tokenType)
+			case envChangeToken:
+				return msg, fmt.Errorf("** Not Implemented: envChangeToken %v", tokenType)
+			case errorToken:
+				return msg, fmt.Errorf("** Not Implemented: errorToken %v", tokenType)
+			case featureExtackToken:
+				return msg, fmt.Errorf("** Not Implemented: featureExtackToken %v", tokenType)
+			case fedAuthInfoToken:
+				return msg, fmt.Errorf("** Not Implemented: fedAuthInfoToken %v", tokenType)
+			case infoToken:
+				return msg, fmt.Errorf("** Not Implemented: infoToken %v", tokenType)
+			case loginAckToken:
+				return msg, fmt.Errorf("** Not Implemented: loginAckToken %v", tokenType)
+			case nbcRowToken:
+				/*
+					Page 106:
+					NBCROW, introduced in TDS 7.3.B, is used to send a row as defined by the COLMETADATA token to the client
+					with null bitmap compression. Null bitmap compression is implemented by using a single bit to specify
+					whether the column is null or not null and also by removing all null column values from the row.
+					Removing the null column values (which can be up to 8 bytes per null instance) from the row provides
+					the compression. The null bitmap contains one bit for each column defined in COLMETADATA.
+					In the null bitmap, a bit value of 1 means that the column is null and therefore not present in the row,
+					and a bit value of 0 means that the column is not null and is present in the row.
+					The null bitmap is always rounded up to the nearest multiple of 8 bits, so there might be 1 to 7 leftover
+					reserved bits at the end of the null bitmap in the last byte of the null bitmap. NBCROW is only used by
+					TDS result set streams from server to client. NBCROW MUST NOT be used in BulkLoadBCP streams.
+					NBCROW MUST NOT be used in TVP row streams.
+				*/
+
+				// So to decide how many bytes we need to read we need to take the length of column metadata
+				// 0  -> 0 byte -- dont' account for this. Pretty sure it's not possible
+				// 1  -> 1 byte
+				// 2  -> 1 byte
+				// 3  -> 1 byte
+				// 4  -> 1 byte
+				// 5  -> 1 byte
+				// 6  -> 1 byte
+				// 7  -> 1 byte
+				// 8  -> 1 byte
+				// 9  -> 2 byte
+				// 10 -> 2 byte
+				// 11 -> 2 byte
+
+				// Check out the bits library as think we can do this in one operation
+				bytesToRead := len(colMeta) / 8
+				// If we don't have a perfect fit then we overflow into another byte
+				if len(colMeta)%8 != 0 {
+					bytesToRead++
+				}
+
+				logp.Info("** bytesToRead: %d", bytesToRead)
+
+				nbc := make([]byte, bytesToRead)
+				if _, err := p.buf.Read(nbc); err != nil {
+					return msg, err
+				}
+
+				// Every column in colMeta has a bit value indicating whether it is present in the row. 1 indicates
+				// it is null and is not present
+
+				logp.Info("** nbc: %v", nbc)
+				logp.Info("** Columns to process: %v", colMeta)
+
+				// We frankly don't care about reading the values
+				// We should just advance the pointer - read them for the time-being
+				for i := 0; i < len(colMeta); i++ {
+
+					// Logic based on: https://play.golang.org/p/copjZW4Pl8_r
+					// Wrap this in a function and see if we can improve
+					// Left most column is the least significant bit. i.e. 00000001 means skip the first column
+					nbcIdx := i / 8
+					logp.Info("*** nbcIdx: %d", nbcIdx)
+					logp.Info("*** nbc[nbcIdx]: %d", nbc[nbcIdx])
+					if nbc[nbcIdx]&1 == 1 {
+						// Skip column
+						logp.Info("*** Skip column: %d", i)
+						// Right shift all bits 1
+						nbc[nbcIdx] = nbc[nbcIdx] >> 1
+						continue
+					}
+					nbc[nbcIdx] = nbc[nbcIdx] >> 1
+					logp.Info("*** Process column: %d", i)
+
+					switch colMeta[i].dataType {
+					// case 			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
+					// datetimetype, flt8type, money4type, int8type:
+					case int1type:
+						var b byte
+						if b, err = p.buf.ReadByte(); err != nil {
+							return msg, err
+						}
+						logp.Info("** int1type. Value: %d", b)
+
+					case int2type:
+						b := make([]byte, 2)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						bs := binary.LittleEndian.Uint16(b)
+						logp.Info("** int2type. Value: %d", bs)
+
+					case int4type:
+						b := make([]byte, 4)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						bs := binary.LittleEndian.Uint32(b)
+						logp.Info("** int4type. Value: %d", bs)
+
+					case int8type:
+						b := make([]byte, 8)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						bs := binary.LittleEndian.Uint64(b)
+						logp.Info("** int8type. Value: %d", bs)
+
+					case intntype: // First byte specifies length
+						var len byte
+						if len, err = p.buf.ReadByte(); err != nil {
+							return msg, err
+						}
+						b := make([]byte, len)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						logp.Info("** intntype: %x. Hex Value: %x", colMeta[i].dataType, b)
+
+					// Some varchar data - throw away
+					case varchartype, bigvarchartype, nvarchartype, nchartype:
+						cCount := make([]byte, 2)
+						if _, err := p.buf.Read(cCount); err != nil {
+							return msg, err
+						}
+						charCount := binary.LittleEndian.Uint16(cCount)
+
+						b := make([]byte, charCount)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						logp.Info("** Char type: %x. Length: %d Hex Value: %x", colMeta[i].dataType, charCount, b)
+
+					default:
+						return msg, fmt.Errorf("** Unhandled column type %x", colMeta[i].dataType)
+					}
+				}
+			case offsetToken:
+				return msg, fmt.Errorf("** Not Implemented: offsetToken %v", tokenType)
+			case orderToken:
+				return msg, fmt.Errorf("** Not Implemented: orderToken %v", tokenType)
+			case returnStatusToken:
+				return msg, fmt.Errorf("** Not Implemented: returnStatusToken %v", tokenType)
+			case returnValueToken:
+				return msg, fmt.Errorf("** Not Implemented: returnValueToken %v", tokenType)
+			case rowToken:
+				logp.Info("** Columns to process: %v", colMeta)
+
+				// We frankly don't care about reading the values
+				// We should just advance the pointer - read them for the time-being
+				for i := 0; i < len(colMeta); i++ {
+					switch colMeta[i].dataType {
+					// case 			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
+					// datetimetype, flt8type, money4type, int8type:
+					case int1type:
+						var b byte
+						if b, err = p.buf.ReadByte(); err != nil {
+							return msg, err
+						}
+						logp.Info("** int1type. Value: %d", b)
+
+					case int2type:
+						b := make([]byte, 2)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						bs := binary.LittleEndian.Uint16(b)
+						logp.Info("** int2type. Value: %d", bs)
+
+					case int4type:
+						b := make([]byte, 4)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						bs := binary.LittleEndian.Uint32(b)
+						logp.Info("** int4type. Value: %d", bs)
+
+					case int8type:
+						b := make([]byte, 8)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						bs := binary.LittleEndian.Uint64(b)
+						logp.Info("** int8type. Value: %d", bs)
+
+					case intntype: // First byte specifies length
+						var len byte
+						if len, err = p.buf.ReadByte(); err != nil {
+							return msg, err
+						}
+						b := make([]byte, len)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						logp.Info("** intntype: %x. Hex Value: %x", colMeta[i].dataType, b)
+
+					// Some varchar data - throw away
+					case varchartype, bigvarchartype, nvarchartype, nchartype:
+						cCount := make([]byte, 2)
+						if _, err := p.buf.Read(cCount); err != nil {
+							return msg, err
+						}
+						charCount := binary.LittleEndian.Uint16(cCount)
+
+						b := make([]byte, charCount)
+						if _, err := p.buf.Read(b); err != nil {
+							return msg, err
+						}
+						logp.Info("** Char type: %x. Length: %d Hex Value: %x", colMeta[i].dataType, charCount, b)
+
+					default:
+						return msg, fmt.Errorf("** Unhandled column type %x", colMeta[i].dataType)
+					}
+				}
+			case sessionStateToken:
+				return msg, fmt.Errorf("** Not Implemented: sessionStateToken %v", tokenType)
+			case sspiToken:
+				return msg, fmt.Errorf("** Not Implemented: sspiToken %v", tokenType)
+			case tabNameToken:
+				return msg, fmt.Errorf("** Not Implemented: tabnameToken %v", tokenType)
+			default:
+				return msg, fmt.Errorf("Unrecognised Token")
+			}
 		}
 
 		// Read the rest of the packet data
-		data := make([]byte, p.buf.Len())
-		if _, err := p.buf.Read(data); err != nil {
-			return msg, err
+		if p.buf.Len() > 0 {
+			data := make([]byte, p.buf.Len())
+			if _, err := p.buf.Read(data); err != nil {
+				return msg, err
+			}
+			logp.Info("** remaining buffer: %v", data)
 		}
 
-		logp.Info("** tabular result: %v", data)
-
-	// case 0x05:
+		// case 0x05:
 	// 	logp.Info("* Type: Unused")
 	case 0x06:
 		msg.requestType = "Attention Signal"
@@ -418,7 +682,10 @@ func (p *parser) parse() (*message, error) {
 	return msg, nil
 }
 
-func parseColumnMetadata(p *parser, columnCount int) error {
+// This should be returning a []columnMeta{}
+func parseColumnMetadata(p *parser, columnCount int) (colMeta []columnMetadata, err error) {
+
+	colMeta = make([]columnMetadata, columnCount)
 
 	for i := 0; i < columnCount; i++ {
 
@@ -428,7 +695,7 @@ func parseColumnMetadata(p *parser, columnCount int) error {
 		*/
 		uType := make([]byte, 4)
 		if _, err := p.buf.Read(uType); err != nil {
-			return err
+			return colMeta, err
 		}
 		logp.Info("** UserType: 0x%x", uType)
 
@@ -458,7 +725,7 @@ func parseColumnMetadata(p *parser, columnCount int) error {
 		*/
 		flags := make([]byte, 2)
 		if _, err := p.buf.Read(flags); err != nil {
-			return err
+			return colMeta, err
 		}
 
 		logp.Info("** flags: 0x%x", flags)
@@ -492,70 +759,88 @@ func parseColumnMetadata(p *parser, columnCount int) error {
 		// [CryptoMetaData] -? Optional - read up about this
 
 		// DataType:
-		/*
-			NULLTYPE = %x1F ; Null INT1TYPE = %x30 ; TinyInt BITTYPE = %x32 ; Bit INT2TYPE = %x34 ; SmallInt INT4TYPE = %x38 ; Int DATETIM4TYPE = %x3A ; SmallDateTime FLT4TYPE = %x3B ; Real MONEYTYPE = %x3C ; Money DATETIMETYPE = %x3D ; DateTime FLT8TYPE = %x3E ; Float MONEY4TYPE = %x7A ; SmallMoney INT8TYPE = %x7F ; BigInt
-		*/
+
 		dataType, err := p.buf.ReadByte()
 		if err != nil {
-			return err
+			return colMeta, err
 		}
 		logp.Info("** dataType: 0x%x", dataType)
 
+		colMeta[i].dataType = dataType
+
+		// Remove in favour of columnMeta
+		var columnName string
+
 		switch dataType {
-		case 0x38: // INT32
-			// ColName = B_VARCHAR
-			// Byte representing the length followed by the column name
-			cNameLength, err := p.buf.ReadByte()
+		// Fixed length data types - all non-nullable.
+		// Don't need to list all of these. Check docs as should be able to apply bitmask
+		case
+			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
+			datetimetype, flt8type, money4type, int8type:
+
+			columnName, err = parseColumnName(p)
 			if err != nil {
-				return err
-			}
-			logp.Info("** cNameLength: 0x%x", cNameLength)
-
-			cName := make([]byte, cNameLength*2)
-			if _, err := p.buf.Read(cName); err != nil {
-				return err
+				return colMeta, err
 			}
 
-			logp.Info("** cName: 0x%x, len: %d", cName, len(cName))
+		case intntype: // 1, 2, 4 & 8 mapping from tinyint -> bigint respectively
+			size, err := p.buf.ReadByte()
+			if err != nil {
+				return colMeta, err
+			}
+			logp.Info("** int size: 0x%x", size)
 
-			r := bytes.NewReader(cName)
-			x := make([]uint16, len(cName)/2)
-			binary.Read(r, binary.LittleEndian, x)
-			logp.Info("** x: %v len: %d", x, len(x))
-			logp.Info("** column name: %s", string(utf16.Decode(x)))
-		case 0xa7: // varchar
-			// ignore 7 bytes (think this is collation - dig further)
+			columnName, err = parseColumnName(p)
+			if err != nil {
+				return colMeta, err
+			}
+
+		case bigvarchartype, nvarchartype: // 5-byte COLLATION, followed by a 2-byte max length (same for varchar & nchar)
 			ignore := make([]byte, 7)
 			if _, err := p.buf.Read(ignore); err != nil {
-				return err
+				return colMeta, err
 			}
+			// todo: work out what this represents (collation?)
 			logp.Info("** ignore: 0x%x", ignore)
 
-			// ColName = B_VARCHAR
-			// Byte representing the length followed by the column name
-			cNameLength, err := p.buf.ReadByte()
+			columnName, err = parseColumnName(p)
 			if err != nil {
-				return err
-			}
-			logp.Info("** cNameLength: 0x%x", cNameLength)
-
-			cName := make([]byte, cNameLength*2)
-			if _, err := p.buf.Read(cName); err != nil {
-				return err
+				return colMeta, err
 			}
 
-			logp.Info("** cName: 0x%x, len: %d", cName, len(cName))
-
-			r := bytes.NewReader(cName)
-			x := make([]uint16, len(cName)/2)
-			binary.Read(r, binary.LittleEndian, x)
-			logp.Info("** x: %v len: %d", x, len(x))
-			logp.Info("** column name: %s", string(utf16.Decode(x)))
 		default:
-			return fmt.Errorf("Unhandled data type: x%x", dataType)
+			return colMeta, fmt.Errorf("Unhandled data type: x%x", dataType)
 		}
+
+		logp.Info("columnName: %s", columnName)
 
 	}
 
-	return nil
+	return colMeta, nil
+}
+
+// This could be more generic. No need to be specific to column names
+func parseColumnName(p *parser) (columnName string, err error) {
+	// ColName = B_VARCHAR
+	// Byte representing the length followed by the column name
+	cNameLength, err := p.buf.ReadByte()
+	if err != nil {
+		return "", err
+	}
+	logp.Info("** cNameLength: 0x%x", cNameLength)
+
+	cName := make([]byte, cNameLength*2)
+	if _, err := p.buf.Read(cName); err != nil {
+		return "", err
+	}
+
+	logp.Info("** cName: 0x%x, len: %d", cName, len(cName))
+
+	r := bytes.NewReader(cName)
+	x := make([]uint16, len(cName)/2)
+	binary.Read(r, binary.LittleEndian, x)
+	logp.Info("** x: %v len: %d", x, len(x))
+	columnName = string(utf16.Decode(x))
+
+	return columnName, nil
 }
