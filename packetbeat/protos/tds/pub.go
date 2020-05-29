@@ -45,7 +45,7 @@ func (pub *transPub) createEvent(requ, resp *message) beat.Event {
 	}
 
 	mssqlresponse := common.MapStr{
-		"rows_returned": 20,
+		"rows_returned": resp.rowsReturned,
 	}
 
 	// mssql.event:

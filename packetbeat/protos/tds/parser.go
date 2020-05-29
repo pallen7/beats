@@ -39,8 +39,12 @@ type message struct {
 	// list element use by 'transactions' for correlation
 	next *message
 
-	// neaten this up:
+	// We'll want to capture different things per request type
+	// neaten this up - request type doesn't apply to response messages. It's always tabular
 	requestType string
+
+	// This only applies to the responses - think all responses have 1 'shape'
+	rowsReturned int
 }
 
 // Error code if stream exceeds max allowed size on append.
@@ -441,6 +445,9 @@ func (p *parser) parse() (*message, error) {
 				// 10 -> 2 byte
 				// 11 -> 2 byte
 
+				// Up the row cound
+				msg.rowsReturned++
+
 				// Check out the bits library as think we can do this in one operation
 				bytesToRead := len(colMeta) / 8
 				// If we don't have a perfect fit then we overflow into another byte
@@ -554,6 +561,8 @@ func (p *parser) parse() (*message, error) {
 				return msg, fmt.Errorf("** Not Implemented: returnValueToken %v", tokenType)
 			case rowToken:
 				logp.Info("** Columns to process: %v", colMeta)
+
+				msg.rowsReturned++
 
 				// We frankly don't care about reading the values
 				// We should just advance the pointer - read them for the time-being
