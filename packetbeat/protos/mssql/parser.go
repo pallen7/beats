@@ -1,4 +1,4 @@
-package tds
+package mssql
 
 import (
 	"bytes"
@@ -44,6 +44,7 @@ type message struct {
 	requestType string
 
 	// This only applies to the responses - think all responses have 1 'shape'
+	// Add columns for each dataset. A dataset would list the column names and the number of rowsReturned?
 	rowsReturned int
 }
 
@@ -158,7 +159,6 @@ func (p *parser) init(
 	cfg *parserConfig,
 	onMessage func(*message) error,
 ) {
-	logp.Info("parser.init()")
 	*p = parser{
 		buf:       streambuf.Buffer{},
 		config:    cfg,
@@ -167,7 +167,6 @@ func (p *parser) init(
 }
 
 func (p *parser) append(data []byte) error {
-	logp.Info("parser.append()")
 	_, err := p.buf.Write(data)
 	if err != nil {
 		return err
@@ -180,7 +179,6 @@ func (p *parser) append(data []byte) error {
 }
 
 func (p *parser) feed(ts time.Time, data []byte) error {
-	logp.Info("parser.feed()")
 	if err := p.append(data); err != nil {
 		return err
 	}
@@ -296,10 +294,10 @@ func (p *parser) parse() (*message, error) {
 	packetSize := binary.BigEndian.Uint16(header[2:4])
 	spid := binary.BigEndian.Uint16(header[4:6])
 
-	if status&0x01 != 0x01 {
-		// Need to understand what to do here
-		logp.Info("** Not end of message")
-		return nil, fmt.Errorf("Not end of message -> still to implement")
+	// We want to create a structure to hold the message if there isn't already one in place
+	if status&0x01 == 0x01 {
+		// This drives whether the event is published. After each parse we call into trans to merge messages
+		msg.isComplete = true
 	}
 
 	if status&0x02 == 0x02 && status&0x01 == 0x01 {
@@ -312,6 +310,7 @@ func (p *parser) parse() (*message, error) {
 
 	// Change the below to StreamName to match spec?
 	switch batchType {
+
 	case 0x01:
 		msg.requestType = "SQLBatch"
 		msg.IsRequest = true
@@ -488,68 +487,7 @@ func (p *parser) parse() (*message, error) {
 					nbc[nbcIdx] = nbc[nbcIdx] >> 1
 					logp.Info("*** Process column: %d", i)
 
-					switch colMeta[i].dataType {
-					// case 			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
-					// datetimetype, flt8type, money4type, int8type:
-					case int1type:
-						var b byte
-						if b, err = p.buf.ReadByte(); err != nil {
-							return msg, err
-						}
-						logp.Info("** int1type. Value: %d", b)
-
-					case int2type:
-						b := make([]byte, 2)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						bs := binary.LittleEndian.Uint16(b)
-						logp.Info("** int2type. Value: %d", bs)
-
-					case int4type:
-						b := make([]byte, 4)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						bs := binary.LittleEndian.Uint32(b)
-						logp.Info("** int4type. Value: %d", bs)
-
-					case int8type:
-						b := make([]byte, 8)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						bs := binary.LittleEndian.Uint64(b)
-						logp.Info("** int8type. Value: %d", bs)
-
-					case intntype: // First byte specifies length
-						var len byte
-						if len, err = p.buf.ReadByte(); err != nil {
-							return msg, err
-						}
-						b := make([]byte, len)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						logp.Info("** intntype: %x. Hex Value: %x", colMeta[i].dataType, b)
-
-					// Some varchar data - throw away
-					case varchartype, bigvarchartype, nvarchartype, nchartype:
-						cCount := make([]byte, 2)
-						if _, err := p.buf.Read(cCount); err != nil {
-							return msg, err
-						}
-						charCount := binary.LittleEndian.Uint16(cCount)
-
-						b := make([]byte, charCount)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						logp.Info("** Char type: %x. Length: %d Hex Value: %x", colMeta[i].dataType, charCount, b)
-
-					default:
-						return msg, fmt.Errorf("** Unhandled column type %x", colMeta[i].dataType)
-					}
+					advanceBufferForDataType(p, colMeta[i].dataType)
 				}
 			case offsetToken:
 				return msg, fmt.Errorf("** Not Implemented: offsetToken %v", tokenType)
@@ -564,71 +502,8 @@ func (p *parser) parse() (*message, error) {
 
 				msg.rowsReturned++
 
-				// We frankly don't care about reading the values
-				// We should just advance the pointer - read them for the time-being
 				for i := 0; i < len(colMeta); i++ {
-					switch colMeta[i].dataType {
-					// case 			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
-					// datetimetype, flt8type, money4type, int8type:
-					case int1type:
-						var b byte
-						if b, err = p.buf.ReadByte(); err != nil {
-							return msg, err
-						}
-						logp.Info("** int1type. Value: %d", b)
-
-					case int2type:
-						b := make([]byte, 2)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						bs := binary.LittleEndian.Uint16(b)
-						logp.Info("** int2type. Value: %d", bs)
-
-					case int4type:
-						b := make([]byte, 4)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						bs := binary.LittleEndian.Uint32(b)
-						logp.Info("** int4type. Value: %d", bs)
-
-					case int8type:
-						b := make([]byte, 8)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						bs := binary.LittleEndian.Uint64(b)
-						logp.Info("** int8type. Value: %d", bs)
-
-					case intntype: // First byte specifies length
-						var len byte
-						if len, err = p.buf.ReadByte(); err != nil {
-							return msg, err
-						}
-						b := make([]byte, len)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						logp.Info("** intntype: %x. Hex Value: %x", colMeta[i].dataType, b)
-
-					// Some varchar data - throw away
-					case varchartype, bigvarchartype, nvarchartype, nchartype:
-						cCount := make([]byte, 2)
-						if _, err := p.buf.Read(cCount); err != nil {
-							return msg, err
-						}
-						charCount := binary.LittleEndian.Uint16(cCount)
-
-						b := make([]byte, charCount)
-						if _, err := p.buf.Read(b); err != nil {
-							return msg, err
-						}
-						logp.Info("** Char type: %x. Length: %d Hex Value: %x", colMeta[i].dataType, charCount, b)
-
-					default:
-						return msg, fmt.Errorf("** Unhandled column type %x", colMeta[i].dataType)
-					}
+					advanceBufferForDataType(p, colMeta[i].dataType)
 				}
 			case sessionStateToken:
 				return msg, fmt.Errorf("** Not Implemented: sessionStateToken %v", tokenType)
@@ -852,4 +727,37 @@ func parseColumnName(p *parser) (columnName string, err error) {
 	columnName = string(utf16.Decode(x))
 
 	return columnName, nil
+}
+
+// todo: rename this function
+// todo: support all data types
+func advanceBufferForDataType(p *parser, dataType byte) error {
+	switch dataType {
+	// case 			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
+	// datetimetype, flt8type, money4type, int8type:
+	case int1type:
+		p.buf.Advance(1)
+	case int2type:
+		p.buf.Advance(2)
+	case int4type:
+		p.buf.Advance(4)
+	case int8type:
+		p.buf.Advance(8)
+	case intntype:
+		len, err := p.buf.ReadByte() // First byte specifies length
+		if err != nil {
+			return err
+		}
+		p.buf.Advance(int(len))
+	case varchartype, bigvarchartype, nvarchartype, nchartype:
+		cCount := make([]byte, 2)
+		if _, err := p.buf.Read(cCount); err != nil {
+			return err
+		}
+		charCount := binary.LittleEndian.Uint16(cCount)
+		if err := p.buf.Advance(int(charCount)); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("** Unhandled data type %x", dataType)
 }

@@ -1,4 +1,4 @@
-package tds
+package mssql
 
 import (
 	"github.com/elastic/beats/v7/libbeat/logp"

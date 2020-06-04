@@ -29,11 +29,11 @@ import (
 	_ "github.com/elastic/beats/v7/packetbeat/protos/icmp"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/memcache"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/mongodb"
+	_ "github.com/elastic/beats/v7/packetbeat/protos/mssql"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/mysql"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/nfs"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/pgsql"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/redis"
-	_ "github.com/elastic/beats/v7/packetbeat/protos/tds"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/thrift"
 	_ "github.com/elastic/beats/v7/packetbeat/protos/tls"
 )

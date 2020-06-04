@@ -1,4 +1,4 @@
-package tds
+package mssql
 
 import (
 	"github.com/elastic/beats/v7/libbeat/beat"
@@ -77,7 +77,7 @@ func (pub *transPub) createEvent(requ, resp *message) beat.Event {
 	// }
 
 	// fields := common.MapStr{
-	// 	"type":         "tds",
+	// 	"type":         "mssql",
 	// 	"status":       status,
 	// 	"responsetime": responseTime,
 	// 	// "bytes_in":     requ.Size,
@@ -104,7 +104,7 @@ func (pub *transPub) createEvent(requ, resp *message) beat.Event {
 	// pbf.SetSource(src)
 	// pbf.SetDestination(dst)
 	// evt.Fields = fields
-	// pbf.Event.Dataset = "tds"
+	// pbf.Event.Dataset = "mssql"
 
 	// logp.Info("** pbf.Network: %v", pbf.Network)
 

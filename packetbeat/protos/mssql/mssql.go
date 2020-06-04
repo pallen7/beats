@@ -1,4 +1,4 @@
-package tds
+package mssql
 
 import (
 	"time"
@@ -30,7 +30,7 @@ type stream struct {
 }
 
 var (
-	debugf = logp.MakeDebug("tds")
+	debugf = logp.MakeDebug("mssql")
 
 	// use isDebug/isDetailed to guard debugf/detailedf to minimize allocations
 	// (garbage collection) when debug log is disabled.
@@ -38,17 +38,15 @@ var (
 )
 
 func init() {
-	logp.Info("tds.init()")
-	protos.Register("tds", New)
+	protos.Register("mssql", New)
 }
 
-// New create and initializes a new tds protocol analyzer instance.
+// New create and initializes a new mssql protocol analyzer instance.
 func New(
 	testMode bool,
 	results protos.Reporter,
 	cfg *common.Config,
 ) (protos.Plugin, error) {
-	logp.Info("tds.new()")
 	p := &tdsPlugin{}
 	config := defaultConfig
 	if !testMode {
@@ -64,7 +62,6 @@ func New(
 }
 
 func (tp *tdsPlugin) init(results protos.Reporter, config *tdsConfig) error {
-	logp.Info("tds.init(results, config)")
 	if err := tp.setFromConfig(config); err != nil {
 		return err
 	}
@@ -75,8 +72,6 @@ func (tp *tdsPlugin) init(results protos.Reporter, config *tdsConfig) error {
 }
 
 func (tp *tdsPlugin) setFromConfig(config *tdsConfig) error {
-
-	logp.Info("tds.setFromConfig(config)")
 
 	// set module configuration
 	if err := tp.ports.Set(config.Ports); err != nil {
@@ -102,14 +97,11 @@ func (tp *tdsPlugin) setFromConfig(config *tdsConfig) error {
 // ConnectionTimeout returns the per stream connection timeout.
 // Return <=0 to set default tcp module transaction timeout.
 func (tp *tdsPlugin) ConnectionTimeout() time.Duration {
-	logp.Info("tds.ConnectionTimeout()")
 	return tp.transConfig.transactionTimeout
 }
 
 // GetPorts returns the ports numbers packets shall be processed for.
 func (tp *tdsPlugin) GetPorts() []int {
-	logp.Info("tds.GetPorts()")
-	logp.Info("- Ports: ~v", tp.ports.Ports)
 	return tp.ports.Ports
 }
 
@@ -120,8 +112,7 @@ func (tp *tdsPlugin) Parse(
 	tcptuple *common.TCPTuple, dir uint8,
 	private protos.ProtocolData,
 ) protos.ProtocolData {
-	logp.Info("tds.Parse()")
-	defer logp.Recover("Parse tdsPlugin exception")
+	defer logp.Recover("Parse mssqlPlugin exception")
 
 	conn := tp.ensureConnection(private)
 	st := conn.streams[dir]
@@ -146,7 +137,6 @@ func (tp *tdsPlugin) ReceivedFin(
 	tcptuple *common.TCPTuple, dir uint8,
 	private protos.ProtocolData,
 ) protos.ProtocolData {
-	logp.Info("tds.ReceivedFin()")
 	return private
 }
 
@@ -155,7 +145,6 @@ func (tp *tdsPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 	nbytes int,
 	private protos.ProtocolData,
 ) (protos.ProtocolData, bool) {
-	logp.Info("tds.GapInStream()")
 	conn := getConnection(private)
 	if conn != nil {
 		tp.onDropConnection(conn)
@@ -167,11 +156,10 @@ func (tp *tdsPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 // onDropConnection processes and optionally sends incomplete
 // transaction in case of connection being dropped due to error
 func (tp *tdsPlugin) onDropConnection(conn *connection) {
-	logp.Info("tds.onDropConnection()")
+
 }
 
 func (tp *tdsPlugin) ensureConnection(private protos.ProtocolData) *connection {
-	logp.Info("tds.ensureConnection()")
 	conn := getConnection(private)
 	if conn == nil {
 		conn = &connection{}
@@ -181,24 +169,22 @@ func (tp *tdsPlugin) ensureConnection(private protos.ProtocolData) *connection {
 }
 
 func (conn *connection) dropStreams() {
-	logp.Info("tds.dropStreams()")
 	conn.streams[0] = nil
 	conn.streams[1] = nil
 }
 
 func getConnection(private protos.ProtocolData) *connection {
-	logp.Info("tds.getConnection()")
 	if private == nil {
 		return nil
 	}
 
 	priv, ok := private.(*connection)
 	if !ok {
-		logp.Warn("tds connection type error")
+		logp.Warn("mssql connection type error")
 		return nil
 	}
 	if priv == nil {
-		logp.Warn("Unexpected: tds connection data not set")
+		logp.Warn("Unexpected: mssql connection data not set")
 		return nil
 	}
 	return priv

@@ -1,6 +1,7 @@
-package tds
+package mssql
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/elastic/beats/v7/libbeat/common"
@@ -132,14 +133,27 @@ func (trans *transactions) tryMergeRequests(
 	prev, msg *message,
 ) (merged bool, err error) {
 	logp.Info("trans.tryMergeRequest()")
-	msg.isComplete = true
 	return false, nil
 }
 
 func (trans *transactions) tryMergeResponses(prev, msg *message) (merged bool, err error) {
 	logp.Info("trans.tryMergeResponses()")
-	msg.isComplete = true
-	return false, nil
+
+	if msg == nil || prev == nil {
+		return false, err
+	}
+
+	// don't think we need this sanity check but go with it anyway for the moment
+	if prev.requestType != msg.requestType {
+		// todo: remove this once finished
+		logp.Info("** RequestType mismatch. prev: %s, msg: %s", prev.requestType, msg.requestType)
+		return false, fmt.Errorf("RequestType mismatch. prev: %s, msg: %s", prev.requestType, msg.requestType)
+	}
+
+	logp.Info("** Merging row counts. prev: %d, msg: %d", prev.rowsReturned, msg.rowsReturned)
+	msg.rowsReturned += prev.rowsReturned
+
+	return true, nil
 }
 
 func (trans *transactions) correlate() error {

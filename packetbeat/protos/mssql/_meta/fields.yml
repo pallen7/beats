@@ -1,9 +1,9 @@
-- key: tds
-  title: "TDS"
+- key: mssql
+  title: "MSSQL"
   description: >
-    TDS (MSSQL)-specific event fields.
+    MSSQL-specific event fields.
   fields:
-    - name: tds
+    - name: mssql
       type: group
       fields:
         - name: requestType

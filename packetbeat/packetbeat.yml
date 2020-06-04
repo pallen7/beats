@@ -90,7 +90,7 @@ packetbeat.protocols:
 #   # the NFS protocol by commenting out the list of ports.
 #   ports: [2049]
 
-- type: tds
+- type: mssql
   ports: [1433]
 
 # - type: tls
