@@ -41,11 +41,11 @@ func (pub *transPub) createEvent(requ, resp *message) beat.Event {
 	// We should be creating these sub-request values as we parse
 	// mssq.request.*
 	mssqlrequest := common.MapStr{
-		"request_type": requ.requestType,
+		"request_type": requ.request.requestType,
 	}
 
 	mssqlresponse := common.MapStr{
-		"rows_returned": resp.rowsReturned,
+		"rows_returned": resp.response.rowsReturned,
 	}
 
 	// mssql.event:

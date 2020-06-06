@@ -1,7 +1,6 @@
 package mssql
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/elastic/beats/v7/libbeat/common"
@@ -72,6 +71,9 @@ func (trans *transactions) onRequest(
 ) error {
 	logp.Info("trans.onRequest()")
 	prev := trans.requests.last()
+
+	// Todo: As we handle all of the merging logic at the parser level to build message details as we process each
+	// package we don't need to merge requets. We only ever process 'complete' requests & responses
 	merged, err := trans.tryMergeRequests(prev, msg)
 	if err != nil {
 		return err
@@ -105,6 +107,10 @@ func (trans *transactions) onResponse(
 ) error {
 	logp.Info("trans.onResponse()")
 	prev := trans.responses.last()
+
+	logp.Info("** prev: %v", prev)
+	logp.Info("** msg: %v", msg)
+
 	merged, err := trans.tryMergeResponses(prev, msg)
 	if err != nil {
 		return err
@@ -138,22 +144,7 @@ func (trans *transactions) tryMergeRequests(
 
 func (trans *transactions) tryMergeResponses(prev, msg *message) (merged bool, err error) {
 	logp.Info("trans.tryMergeResponses()")
-
-	if msg == nil || prev == nil {
-		return false, err
-	}
-
-	// don't think we need this sanity check but go with it anyway for the moment
-	if prev.requestType != msg.requestType {
-		// todo: remove this once finished
-		logp.Info("** RequestType mismatch. prev: %s, msg: %s", prev.requestType, msg.requestType)
-		return false, fmt.Errorf("RequestType mismatch. prev: %s, msg: %s", prev.requestType, msg.requestType)
-	}
-
-	logp.Info("** Merging row counts. prev: %d, msg: %d", prev.rowsReturned, msg.rowsReturned)
-	msg.rowsReturned += prev.rowsReturned
-
-	return true, nil
+	return false, nil
 }
 
 func (trans *transactions) correlate() error {
@@ -173,6 +164,7 @@ func (trans *transactions) correlate() error {
 	// merge requests with responses into transactions
 	for !responses.empty() && !requests.empty() {
 		resp := responses.first()
+		logp.Info("trans.correlate: first response: %v", resp)
 		if !resp.isComplete {
 			break
 		}
