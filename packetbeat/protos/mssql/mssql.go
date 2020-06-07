@@ -10,8 +10,8 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/protos/tcp"
 )
 
-// tdsPlugin application level protocol analyzer plugin
-type tdsPlugin struct {
+// mssqlPlugin application level protocol analyzer plugin
+type mssqlPlugin struct {
 	ports        protos.PortsConfig
 	parserConfig parserConfig
 	transConfig  transactionConfig
@@ -21,7 +21,7 @@ type tdsPlugin struct {
 // Application Layer tcp stream data to be stored on tcp connection context.
 type connection struct {
 	streams [2]*stream
-	trans   transactions
+	trans   mssqlTransaction
 }
 
 // Uni-directional tcp stream state for parsing messages.
@@ -47,7 +47,7 @@ func New(
 	results protos.Reporter,
 	cfg *common.Config,
 ) (protos.Plugin, error) {
-	p := &tdsPlugin{}
+	p := &mssqlPlugin{}
 	config := defaultConfig
 	if !testMode {
 		if err := cfg.Unpack(&config); err != nil {
@@ -61,7 +61,7 @@ func New(
 	return p, nil
 }
 
-func (tp *tdsPlugin) init(results protos.Reporter, config *tdsConfig) error {
+func (tp *mssqlPlugin) init(results protos.Reporter, config *tdsConfig) error {
 	if err := tp.setFromConfig(config); err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (tp *tdsPlugin) init(results protos.Reporter, config *tdsConfig) error {
 	return nil
 }
 
-func (tp *tdsPlugin) setFromConfig(config *tdsConfig) error {
+func (tp *mssqlPlugin) setFromConfig(config *tdsConfig) error {
 
 	// set module configuration
 	if err := tp.ports.Set(config.Ports); err != nil {
@@ -96,20 +96,21 @@ func (tp *tdsPlugin) setFromConfig(config *tdsConfig) error {
 
 // ConnectionTimeout returns the per stream connection timeout.
 // Return <=0 to set default tcp module transaction timeout.
-func (tp *tdsPlugin) ConnectionTimeout() time.Duration {
+func (tp *mssqlPlugin) ConnectionTimeout() time.Duration {
 	return tp.transConfig.transactionTimeout
 }
 
 // GetPorts returns the ports numbers packets shall be processed for.
-func (tp *tdsPlugin) GetPorts() []int {
+func (tp *mssqlPlugin) GetPorts() []int {
 	return tp.ports.Ports
 }
 
 // Parse processes a TCP packet. Return nil if connection
 // state shall be dropped (e.g. parser not in sync with tcp stream)
-func (tp *tdsPlugin) Parse(
+func (tp *mssqlPlugin) Parse(
 	pkt *protos.Packet,
-	tcptuple *common.TCPTuple, dir uint8,
+	tcptuple *common.TCPTuple,
+	dir uint8,
 	private protos.ProtocolData,
 ) protos.ProtocolData {
 	defer logp.Recover("Parse mssqlPlugin exception")
@@ -126,14 +127,14 @@ func (tp *tdsPlugin) Parse(
 
 	if err := st.parser.feed(pkt.Ts, pkt.Payload); err != nil {
 		debugf("%v, dropping TCP stream for error in direction %v.", err, dir)
-		tp.onDropConnection(conn)
+		tp.onDropConnection(conn) // todo: we can remove this if we aren't going to do anything with errors that are returned
 		return nil
 	}
 	return conn
 }
 
 // ReceivedFin handles TCP-FIN packet.
-func (tp *tdsPlugin) ReceivedFin(
+func (tp *mssqlPlugin) ReceivedFin(
 	tcptuple *common.TCPTuple, dir uint8,
 	private protos.ProtocolData,
 ) protos.ProtocolData {
@@ -141,7 +142,7 @@ func (tp *tdsPlugin) ReceivedFin(
 }
 
 // GapInStream handles lost packets in tcp-stream.
-func (tp *tdsPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
+func (tp *mssqlPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 	nbytes int,
 	private protos.ProtocolData,
 ) (protos.ProtocolData, bool) {
@@ -155,11 +156,11 @@ func (tp *tdsPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 
 // onDropConnection processes and optionally sends incomplete
 // transaction in case of connection being dropped due to error
-func (tp *tdsPlugin) onDropConnection(conn *connection) {
+func (tp *mssqlPlugin) onDropConnection(conn *connection) {
 
 }
 
-func (tp *tdsPlugin) ensureConnection(private protos.ProtocolData) *connection {
+func (tp *mssqlPlugin) ensureConnection(private protos.ProtocolData) *connection {
 	conn := getConnection(private)
 	if conn == nil {
 		conn = &connection{}

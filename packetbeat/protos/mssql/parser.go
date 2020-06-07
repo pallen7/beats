@@ -19,29 +19,32 @@ todo:
 - We don't need a message structure as we will be updating the request/response object that sites on
   the parser as we receive messages
 - Once we have a complete transaction (request & response) we want to call into pub.onTransaction to create the event
+
+
+Structure:
+- We have a parser that needs to know about previous requests to process this request (i.e. colMetadata to read rows)
+- We have individual messages and these are the only thing that trans.processMessage currently understands
+--- These messages need to contain the SQL info so that they can be passed to the publisher
+- Once we have processed a message p.message is set to nil and the variable representation msg is passed to onMessage
+- If we want the transaction to be responsible for the Transaction level data then we need to call onMessage after every message
+
+- Just leave the SQL specific data at the parser level
+- Call transaction.addMssqlData a
+
+// All that createEvent in pub.go currently accepts 2 messages -> req, resp
+
+
 */
 
-type mssqlRequest struct {
-	requestType string
-}
-
-type mssqlResponse struct {
-	responseType string
-	colDataTypes []byte
-	rowsReturned int
-}
+// Let's add a request builder and response builder (do we really need a request builder?)
+// Should we call them processors?
+// Just leave the parser to be responsible for chewing throught the bytes and converting them into usable information
+// What responsibility does the trans.go file have if we get rid of it?
 
 type parser struct {
-	buf     streambuf.Buffer
-	config  *parserConfig
-	message *message
-
-	// Currently these 2 are mutually exclusive. If we remove trans.go can we just manage this ourselves?
-	request  *mssqlRequest
-	response *mssqlResponse
-
-	// Rename this and the corresponding function in trans.go to onCompleteMessage
-	// We handle the 'merging' of packets into a complete message in the parser to no need for all of the correlation logic
+	buf       streambuf.Buffer
+	config    *parserConfig
+	message   *message
 	onMessage func(m *message) error
 }
 
@@ -49,20 +52,16 @@ type parserConfig struct {
 	maxBytes int
 }
 
-// Do we even need this as we are
+// It doesn't represent an individual packet that's being processed but a complete message request or response
 type message struct {
+	// Set these variables based on the first request that we get
 	applayer.Message
 
-	// indicator for parsed message being complete or requires more messages
-	// (if false) to be merged to generate full message.
 	isComplete bool
 
-	// list element use by 'transactions' for correlation
-	next *message
-
-	// We probably want to differentiate these types from the 'working' types held at the parser level
-	request  *mssqlRequest
-	response *mssqlResponse
+	messageType  string
+	colDataTypes []byte
+	rowsReturned int
 }
 
 // Error code if stream exceeds max allowed size on append.
@@ -177,13 +176,15 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 	// newMessage creates an appPlayer message containing all of our core fields. Do we need to care about merging messages
 	// together as we need to capture 'core' information from various packets. Currently we will take the 'core' fields
 	// from the last packet as we only process on completion of a message so this feels wrong
+
+	// why is this in a for loop?
 	for p.buf.Total() > 0 {
 		if p.message == nil {
 			// allocate new message object to be used by parser with current timestamp
 			p.message = p.newMessage(ts)
 		}
 
-		msg, err := p.parse()
+		err := p.parse()
 		if err != nil {
 			logp.Info("** parse returned error: %s", err)
 
@@ -194,23 +195,20 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 
 			return err
 		}
-		if msg == nil {
-			logp.Info("** parse returned nil msg")
+		if p.message == nil {
+			logp.Info("** nil message parsed")
 			break // wait for more data
 		}
 
-		// reset buffer and message -> handle next message in buffer
-		// If we aren't at the end of the message does this actually reset?
+		// reset buffer ready to for more packets
 		p.buf.Reset()
-		p.message = nil
 
-		// call message handler callback
-		// We don't really care about saving every packet - rename the below to onCompleteMessage
-		// We can remove the logic in trans.onMessage that tries to take care of the correlation
-		if msg.isComplete {
-			if err := p.onMessage(msg); err != nil {
+		if p.message.isComplete {
+			if err := p.onMessage(p.message); err != nil {
+				p.message = nil
 				return err
 			}
+			p.message = nil
 		}
 	}
 
@@ -226,7 +224,7 @@ func (p *parser) newMessage(ts time.Time) *message {
 	}
 }
 
-func (p *parser) parse() (*message, error) {
+func (p *parser) parse() error {
 	/* 2.2.3.1 Packet Header
 
 	// Byte	Usage
@@ -264,7 +262,7 @@ func (p *parser) parse() (*message, error) {
 	// Second byte dictates whether this is the end of the message
 	header := make([]byte, 8)
 	if _, err := p.buf.Read(header); err != nil {
-		return nil, err
+		return err
 	}
 
 	logp.Info("** header: %x", header)
@@ -276,26 +274,28 @@ func (p *parser) parse() (*message, error) {
 	// packetSize := binary.BigEndian.Uint16(header[2:4])
 	// spid := binary.BigEndian.Uint16(header[4:6])
 
-	// We want to create a structure to hold the message if there isn't already one in place
-	if status&0x01 == 0x01 {
-		// This drives whether the event is published. After each parse we call into trans to merge messages
-		msg.isComplete = true
-	}
+	// todo: create a statusTypes const
 
 	if status&0x02 == 0x02 && status&0x01 == 0x01 {
 		// Ignore message
-		logp.Info("** Ignore message")
-		return nil, fmt.Errorf("Ignore message")
+		return fmt.Errorf("Ignore message")
+	}
+
+	// We want to create a structure to hold the message if there isn't already one in place
+	if status&0x01 == 0x01 {
+		// This drives whether the event is published. After each parse we call into trans to merge messages
+		p.message.isComplete = true
 	}
 
 	// ** Need to understand what to do if we receive 0x08
 
 	// Change the below to StreamName to match spec?
+	// todo: create a batch types const
 	switch batchType {
 
 	case 0x01:
-		p.request.requestType = "SQLBatch"
-		msg.IsRequest = true
+		p.message.messageType = "SQLBatch"
+		p.message.IsRequest = true
 
 		// Need to:
 		// Read the headers - only on the first packet (atm always assume there are headers)
@@ -305,7 +305,7 @@ func (p *parser) parse() (*message, error) {
 		// Need to read 4 bytes (DWORD -> uint32) and decode (littleEndian format)
 		head1 := make([]byte, 4)
 		if _, err := p.buf.Read(head1); err != nil {
-			return msg, err
+			return err
 		}
 		headLen := binary.LittleEndian.Uint32(head1)
 
@@ -315,7 +315,7 @@ func (p *parser) parse() (*message, error) {
 		// Read the rest of the packet data
 		data := make([]byte, p.buf.Len())
 		if _, err := p.buf.Read(data); err != nil {
-			return msg, err
+			return err
 		}
 
 		// Decode from UCS-2 (bit naughty as using the utf16 decode - see notes)
@@ -325,36 +325,35 @@ func (p *parser) parse() (*message, error) {
 		logp.Info("** sql batch: %s", string(utf16.Decode(x)))
 
 	case 0x02:
-		p.request.requestType = "Pre-TDS7 Login"
-		msg.IsRequest = true
+		p.message.messageType = "Pre-TDS7 Login"
+		p.message.IsRequest = true
 	case 0x03:
 		// Can't recreate this from SSMS so will need to write a proggie to exercise RPC
-		p.request.requestType = "RPC"
-		msg.IsRequest = true
+		p.message.messageType = "RPC"
+		p.message.IsRequest = true
 	case 0x04:
-		// NB: not really a request type
-		p.response.responseType = "Tabular result"
-		msg.IsRequest = false
+		p.message.messageType = "Tabular result"
+		p.message.IsRequest = false
 
 		for p.buf.Len() > 0 {
 			// We need to loop around the below and pull off each token as we go
 			tokenType, err := p.buf.ReadByte()
 			if err != nil {
-				return msg, err
+				return err
 			}
 
 			switch tokenType {
 			case altMetadataToken:
-				return msg, fmt.Errorf("** Not Implemented: altMetadataToken 0x%x", tokenType)
+				return fmt.Errorf("** Not Implemented: altMetadataToken 0x%x", tokenType)
 			case altRowToken:
-				return msg, fmt.Errorf("** Not Implemented: altRowToken 0x%x", tokenType)
+				return fmt.Errorf("** Not Implemented: altRowToken 0x%x", tokenType)
 			case colMetadataToken:
 				logp.Info("** colMetadataToken 0x%x", tokenType)
 
 				// Column Count USHORT (unsigned 2 byte int)
 				cCount := make([]byte, 2)
 				if _, err := p.buf.Read(cCount); err != nil {
-					return msg, err
+					return err
 				}
 				columnCount := binary.LittleEndian.Uint16(cCount)
 				logp.Info("** Column Count: %d", columnCount)
@@ -362,38 +361,38 @@ func (p *parser) parse() (*message, error) {
 				// CekTable???? -->
 				cCekTable := make([]byte, 2)
 				if _, err := p.buf.Read(cCekTable); err != nil {
-					return msg, err
+					return err
 				}
 				logp.Info("** cekTable?: x%x", cCekTable)
 
-				if p.response.colDataTypes, err = parseColumnMetadata(p, int(columnCount)); err != nil {
-					return msg, err
+				if p.message.colDataTypes, err = parseColumnMetadata(p, int(columnCount)); err != nil {
+					return err
 				}
-				logp.Info("** colDataTypes: %v", p.response.colDataTypes)
+				logp.Info("** colDataTypes: %v", p.message.colDataTypes)
 
 			case colInfoToken:
-				return msg, fmt.Errorf("** Not Implemented: colInfoToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: colInfoToken %v", tokenType)
 			case dataClassificationToken:
-				return msg, fmt.Errorf("** Not Implemented: dataClassificationToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: dataClassificationToken %v", tokenType)
 			case doneToken:
 				// Revisit this - just skip to the end for the moment
 				p.buf.Advance(p.buf.Len())
 			case doneProcToken:
-				return msg, fmt.Errorf("** Not Implemented: doneProcToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: doneProcToken %v", tokenType)
 			case doneInProcToken:
-				return msg, fmt.Errorf("** Not Implemented: doneInProcToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: doneInProcToken %v", tokenType)
 			case envChangeToken:
-				return msg, fmt.Errorf("** Not Implemented: envChangeToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: envChangeToken %v", tokenType)
 			case errorToken:
-				return msg, fmt.Errorf("** Not Implemented: errorToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: errorToken %v", tokenType)
 			case featureExtackToken:
-				return msg, fmt.Errorf("** Not Implemented: featureExtackToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: featureExtackToken %v", tokenType)
 			case fedAuthInfoToken:
-				return msg, fmt.Errorf("** Not Implemented: fedAuthInfoToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: fedAuthInfoToken %v", tokenType)
 			case infoToken:
-				return msg, fmt.Errorf("** Not Implemented: infoToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: infoToken %v", tokenType)
 			case loginAckToken:
-				return msg, fmt.Errorf("** Not Implemented: loginAckToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: loginAckToken %v", tokenType)
 			case nbcRowToken:
 				/*
 					Page 106:
@@ -425,12 +424,12 @@ func (p *parser) parse() (*message, error) {
 				// 11 -> 2 byte
 
 				// Up the row cound
-				p.response.rowsReturned++
+				p.message.rowsReturned++
 
 				// Check out the bits library as think we can do this in one operation
-				bytesToRead := len(p.response.colDataTypes) / 8
+				bytesToRead := len(p.message.colDataTypes) / 8
 				// If we don't have a perfect fit then we overflow into another byte
-				if len(p.response.colDataTypes)%8 != 0 {
+				if len(p.message.colDataTypes)%8 != 0 {
 					bytesToRead++
 				}
 
@@ -438,18 +437,18 @@ func (p *parser) parse() (*message, error) {
 
 				nbc := make([]byte, bytesToRead)
 				if _, err := p.buf.Read(nbc); err != nil {
-					return msg, err
+					return err
 				}
 
 				// Every column in colMeta has a bit value indicating whether it is present in the row. 1 indicates
 				// it is null and is not present
 
 				logp.Info("** nbc: %v", nbc)
-				logp.Info("** Columns to process: %v", p.response.colDataTypes)
+				logp.Info("** Columns to process: %v", p.message.colDataTypes)
 
 				// We frankly don't care about reading the values
 				// We should just advance the pointer - read them for the time-being
-				for i := 0; i < len(p.response.colDataTypes); i++ {
+				for i := 0; i < len(p.message.colDataTypes); i++ {
 
 					// Logic based on: https://play.golang.org/p/copjZW4Pl8_r
 					// Wrap this in a function and see if we can improve
@@ -467,30 +466,30 @@ func (p *parser) parse() (*message, error) {
 					nbc[nbcIdx] = nbc[nbcIdx] >> 1
 					logp.Info("*** Process column: %d", i)
 
-					advanceBufferForDataType(p, p.response.colDataTypes[i])
+					advanceBufferForDataType(p, p.message.colDataTypes[i])
 				}
 			case offsetToken:
-				return msg, fmt.Errorf("** Not Implemented: offsetToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: offsetToken %v", tokenType)
 			case orderToken:
-				return msg, fmt.Errorf("** Not Implemented: orderToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: orderToken %v", tokenType)
 			case returnStatusToken:
-				return msg, fmt.Errorf("** Not Implemented: returnStatusToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: returnStatusToken %v", tokenType)
 			case returnValueToken:
-				return msg, fmt.Errorf("** Not Implemented: returnValueToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: returnValueToken %v", tokenType)
 			case rowToken:
-				p.response.rowsReturned++
+				p.message.rowsReturned++
 
-				for i := 0; i < len(p.response.colDataTypes); i++ {
-					advanceBufferForDataType(p, p.response.colDataTypes[i])
+				for i := 0; i < len(p.message.colDataTypes); i++ {
+					advanceBufferForDataType(p, p.message.colDataTypes[i])
 				}
 			case sessionStateToken:
-				return msg, fmt.Errorf("** Not Implemented: sessionStateToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: sessionStateToken %v", tokenType)
 			case sspiToken:
-				return msg, fmt.Errorf("** Not Implemented: sspiToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: sspiToken %v", tokenType)
 			case tabNameToken:
-				return msg, fmt.Errorf("** Not Implemented: tabnameToken %v", tokenType)
+				return fmt.Errorf("** Not Implemented: tabnameToken %v", tokenType)
 			default:
-				return msg, fmt.Errorf("Unrecognised Token")
+				return fmt.Errorf("Unrecognised Token")
 			}
 		}
 
@@ -498,7 +497,7 @@ func (p *parser) parse() (*message, error) {
 		if p.buf.Len() > 0 {
 			data := make([]byte, p.buf.Len())
 			if _, err := p.buf.Read(data); err != nil {
-				return msg, err
+				return err
 			}
 			logp.Info("** remaining buffer: %v", data)
 		}
@@ -506,59 +505,38 @@ func (p *parser) parse() (*message, error) {
 		// case 0x05:
 	// 	logp.Info("* Type: Unused")
 	case 0x06:
-		p.request.requestType = "Attention Signal"
-		msg.IsRequest = true
+		p.message.messageType = "Attention Signal"
+		p.message.IsRequest = true
 	case 0x07:
-		p.request.requestType = "Bulk load data"
-		msg.IsRequest = true
+		p.message.messageType = "Bulk load data"
+		p.message.IsRequest = true
 	case 0x08:
-		p.request.requestType = "Federated Authentication Token"
-		msg.IsRequest = true
+		p.message.messageType = "Federated Authentication Token"
+		p.message.IsRequest = true
 	// case 0x09, 0x0A, 0x0B, 0x0C, 0x0D:
 	// 	logp.Info("* Type: Unused")
 	case 0x0E:
-		p.request.requestType = "Transaction Manager Request"
-		msg.IsRequest = true
+		p.message.messageType = "Transaction Manager Request"
+		p.message.IsRequest = true
 	// case 0x0F:
 	// 	logp.Info("* Type: Unused")
 	case 0x10:
-		p.request.requestType = "TDS7 Login"
-		msg.IsRequest = true
+		p.message.messageType = "TDS7 Login"
+		p.message.IsRequest = true
 	case 0x20:
-		p.request.requestType = "SSPI"
-		msg.IsRequest = true
+		p.message.messageType = "SSPI"
+		p.message.IsRequest = true
 	case 0x30:
-		p.request.requestType = "Pre-Login"
-		msg.IsRequest = true
+		p.message.messageType = "Pre-Login"
+		p.message.IsRequest = true
 	default:
-		return nil, fmt.Errorf("Unrecognised TDS Type")
+		return fmt.Errorf("Unrecognised TDS Type")
 	}
 
 	// Mark buffer as read (even if it's not)
 	p.buf.Advance(p.buf.Len())
 
-	// Move into a build fields function or similar
-	if msg.isComplete {
-		logp.Info("msg.isComplete")
-		if msg.IsRequest {
-			logp.Info("msg.IsRequest")
-			msg.request = &mssqlRequest{
-				requestType: p.request.requestType,
-			}
-		} else {
-			logp.Info("msg.IsResponse")
-			msg.response = &mssqlResponse{
-				responseType: p.response.responseType,
-				rowsReturned: p.response.rowsReturned,
-			}
-		}
-		p.request = nil
-		p.response = nil
-		logp.Info("msg.request: %v", msg.request)
-		logp.Info("msg.response: %v", msg.response)
-	}
-
-	return msg, nil
+	return nil
 }
 
 func parseColumnMetadata(p *parser, columnCount int) (colMeta []byte, err error) {

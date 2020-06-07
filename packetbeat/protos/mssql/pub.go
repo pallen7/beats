@@ -5,7 +5,6 @@ import (
 	"github.com/elastic/beats/v7/libbeat/common"
 	"github.com/elastic/beats/v7/libbeat/logp"
 
-	"github.com/elastic/beats/v7/packetbeat/pb"
 	"github.com/elastic/beats/v7/packetbeat/protos"
 )
 
@@ -17,35 +16,39 @@ type transPub struct {
 	results protos.Reporter
 }
 
-func (pub *transPub) onTransaction(requ, resp *message) error {
+func (pub *transPub) onTransaction(tran *mssqlTransaction) error {
 	logp.Info("pub.onTransaction()")
 	if pub.results == nil {
 		return nil
 	}
 
-	pub.results(pub.createEvent(requ, resp))
+	pub.results(pub.createEvent(tran))
 	return nil
 }
 
-func (pub *transPub) createEvent(requ, resp *message) beat.Event {
+func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 	logp.Info("pub.createEvent()")
 
-	evt, pbf := pb.NewBeatEvent(requ.Ts)
+	evt := beat.Event{}
+
+	// Create our SQL specific fields here
+
+	tran.appTransaction.Event(&evt)
 
 	// Look at the other packetbeat protos and decide which of the ECS fields to include. mysql.go has straight-forward examples
 
-	pbf.Network.Transport = "tcp"
+	//pbf.Network.Transport = "tcp"
 	fields := evt.Fields
 	fields["type"] = "mssql" // Mandatory field
 
 	// We should be creating these sub-request values as we parse
 	// mssq.request.*
 	mssqlrequest := common.MapStr{
-		"request_type": requ.request.requestType,
+		"request_type": tran.requestType,
 	}
 
 	mssqlresponse := common.MapStr{
-		"rows_returned": resp.response.rowsReturned,
+		"rows_returned": tran.rowsReturned,
 	}
 
 	// mssql.event:

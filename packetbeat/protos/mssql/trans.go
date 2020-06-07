@@ -9,11 +9,15 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
-type transactions struct {
+// A mssqlTransaction represents a full suite of packets that make up 1 request message & response message
+type mssqlTransaction struct {
 	config *transactionConfig
 
-	requests  messageList
-	responses messageList
+	appTransaction applayer.Transaction
+
+	// SQL Specific fields
+	requestType  string
+	rowsReturned int
 
 	onTransaction transactionHandler
 }
@@ -22,26 +26,23 @@ type transactionConfig struct {
 	transactionTimeout time.Duration
 }
 
-type transactionHandler func(requ, resp *message) error
+type transactionHandler func(*mssqlTransaction) error
 
-// List of messages available for correlation
-type messageList struct {
-	head, tail *message
-}
-
-func (trans *transactions) init(c *transactionConfig, cb transactionHandler) {
+func (trans *mssqlTransaction) init(c *transactionConfig, cb transactionHandler) {
 	logp.Info("trans.init()")
 	trans.config = c
 	trans.onTransaction = cb
 }
 
-func (trans *transactions) onMessage(
+func (trans *mssqlTransaction) onMessage(
 	tuple *common.IPPortTuple,
 	dir uint8,
 	msg *message,
 ) error {
 	logp.Info("trans.onMessage()")
 	var err error
+
+	// Todo: At this point we need to copy everything from our completed message into our Transaction before the message is cleared
 
 	msg.Tuple = *tuple
 	msg.Transport = applayer.TransportTCP
@@ -64,161 +65,39 @@ func (trans *transactions) onMessage(
 
 // onRequest handles request messages, merging with incomplete requests
 // and adding non-merged requests into the correlation list.
-func (trans *transactions) onRequest(
+func (trans *mssqlTransaction) onRequest(
 	tuple *common.IPPortTuple,
 	dir uint8,
 	msg *message,
 ) error {
 	logp.Info("trans.onRequest()")
-	prev := trans.requests.last()
 
-	// Todo: As we handle all of the merging logic at the parser level to build message details as we process each
-	// package we don't need to merge requets. We only ever process 'complete' requests & responses
-	merged, err := trans.tryMergeRequests(prev, msg)
-	if err != nil {
-		return err
-	}
-	if merged {
-		if isDebug {
-			debugf("request message got merged")
-		}
-		msg = prev
-	} else {
-		trans.requests.append(msg)
-	}
+	// todo: Create our Transaction information based on the request message
 
-	if !msg.isComplete {
-		return nil
-	}
+	// If request already exists then (log an error and?) replace the request
 
-	if isDebug {
-		debugf("request message complete")
-	}
-
-	return trans.correlate()
+	trans.appTransaction.InitWithMsg("mssql", &msg.Message)
+	trans.requestType = msg.messageType
+	return nil
 }
 
 // onRequest handles response messages, merging with incomplete requests
 // and adding non-merged responses into the correlation list.
-func (trans *transactions) onResponse(
+func (trans *mssqlTransaction) onResponse(
 	tuple *common.IPPortTuple,
 	dir uint8,
 	msg *message,
 ) error {
 	logp.Info("trans.onResponse()")
-	prev := trans.responses.last()
 
-	logp.Info("** prev: %v", prev)
-	logp.Info("** msg: %v", msg)
+	// todo: Add our information into Transaction (i.e. end time, bytes in etc)
+	// todo: Check that we have a request on the transaction. If we don't then return an error and dump this response
 
-	merged, err := trans.tryMergeResponses(prev, msg)
-	if err != nil {
+	trans.rowsReturned = msg.rowsReturned
+
+	// todo: Sort this out as it looks a bit weird calling a function on the trans variable and also passing that as a parameter
+	if err := trans.onTransaction(trans); err != nil {
 		return err
 	}
-	if merged {
-		if isDebug {
-			debugf("response message got merged")
-		}
-		msg = prev
-	} else {
-		trans.responses.append(msg)
-	}
-
-	if !msg.isComplete {
-		return nil
-	}
-
-	if isDebug {
-		debugf("response message complete")
-	}
-
-	return trans.correlate()
-}
-
-func (trans *transactions) tryMergeRequests(
-	prev, msg *message,
-) (merged bool, err error) {
-	logp.Info("trans.tryMergeRequest()")
-	return false, nil
-}
-
-func (trans *transactions) tryMergeResponses(prev, msg *message) (merged bool, err error) {
-	logp.Info("trans.tryMergeResponses()")
-	return false, nil
-}
-
-func (trans *transactions) correlate() error {
-	logp.Info("trans.correlate()")
-	requests := &trans.requests
-	responses := &trans.responses
-
-	// drop responses with missing requests
-	if requests.empty() {
-		for !responses.empty() {
-			logp.Warn("Response from unknown transaction. Ignoring.")
-			responses.pop()
-		}
-		return nil
-	}
-
-	// merge requests with responses into transactions
-	for !responses.empty() && !requests.empty() {
-		resp := responses.first()
-		logp.Info("trans.correlate: first response: %v", resp)
-		if !resp.isComplete {
-			break
-		}
-
-		requ := requests.pop()
-		responses.pop()
-
-		logp.Info("trans.correlate: request: %v", requ)
-		logp.Info("trans.correlate: response: %v", resp)
-
-		if err := trans.onTransaction(requ, resp); err != nil {
-			return err
-		}
-	}
-
 	return nil
-}
-
-func (ml *messageList) append(msg *message) {
-	logp.Info("trans.append()")
-	if ml.tail == nil {
-		ml.head = msg
-	} else {
-		ml.tail.next = msg
-	}
-	msg.next = nil
-	ml.tail = msg
-}
-
-func (ml *messageList) empty() bool {
-	logp.Info("trans.empty()")
-	return ml.head == nil
-}
-
-func (ml *messageList) pop() *message {
-	logp.Info("trans.pop()")
-	if ml.head == nil {
-		return nil
-	}
-
-	msg := ml.head
-	ml.head = ml.head.next
-	if ml.head == nil {
-		ml.tail = nil
-	}
-	return msg
-}
-
-func (ml *messageList) first() *message {
-	logp.Info("trans.first()")
-	return ml.head
-}
-
-func (ml *messageList) last() *message {
-	logp.Info("trans.last()")
-	return ml.tail
 }
