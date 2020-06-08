@@ -14,32 +14,15 @@ import (
 )
 
 /*
-todo:
-- Keep the publisher to publish events but remove trans.go. We will manage the transaction within the parser.
-- We don't need a message structure as we will be updating the request/response object that sites on
-  the parser as we receive messages
-- Once we have a complete transaction (request & response) we want to call into pub.onTransaction to create the event
-
-
-Structure:
-- We have a parser that needs to know about previous requests to process this request (i.e. colMetadata to read rows)
-- We have individual messages and these are the only thing that trans.processMessage currently understands
---- These messages need to contain the SQL info so that they can be passed to the publisher
-- Once we have processed a message p.message is set to nil and the variable representation msg is passed to onMessage
-- If we want the transaction to be responsible for the Transaction level data then we need to call onMessage after every message
-
-- Just leave the SQL specific data at the parser level
-- Call transaction.addMssqlData a
-
-// All that createEvent in pub.go currently accepts 2 messages -> req, resp
-
-
+MVP todo list:
+- Neaten up the parser functions (i.e. create parseHeader)
+- Fix bug where we can't process 1000 rows (recieve a parser.eof error)
+- Add the ECS fields into pub.go/trans.go
+- Validate the header details match between separate packets
+- Add support for RPC calls
+- Add tests
+- Create a specification file and add all of the constants (and ones for the headers) into there (doesn't seem to be idiomatic)
 */
-
-// Let's add a request builder and response builder (do we really need a request builder?)
-// Should we call them processors?
-// Just leave the parser to be responsible for chewing throught the bytes and converting them into usable information
-// What responsibility does the trans.go file have if we get rid of it?
 
 type parser struct {
 	buf       streambuf.Buffer
@@ -67,81 +50,6 @@ type message struct {
 // Error code if stream exceeds max allowed size on append.
 var (
 	ErrStreamTooLarge = errors.New("Stream data too large")
-)
-
-// token types
-const (
-	altMetadataToken        = 0x88 // (variable count)
-	altRowToken             = 0xd3 // (zero length)
-	colMetadataToken        = 0x81 // (variable count)
-	colInfoToken            = 0xa5 // (variable length)
-	dataClassificationToken = 0xa3 // (variable length) (introduced in tds 7.4)
-	doneToken               = 0xfd // (fixed length)
-	doneProcToken           = 0xfe // (fixed length)
-	doneInProcToken         = 0xff // (fixed length)
-	envChangeToken          = 0xe3 // (variable length)
-	errorToken              = 0xaa // (variable length)
-	featureExtackToken      = 0xae // (variable length) ; (introduced in tds 7.4)
-	fedAuthInfoToken        = 0xee // (variable length) ; (introduced in tds 7.4)
-	infoToken               = 0xab // (variable length)
-	loginAckToken           = 0xad // (variable length)
-	nbcRowToken             = 0xd2 // (zero length); (introduced in tds 7.3)
-	offsetToken             = 0x78 // (fixed length)
-	orderToken              = 0xa9 // (variable length)
-	returnStatusToken       = 0x79 // (fixed length)
-	returnValueToken        = 0xac // (variable length)
-	rowToken                = 0xd1 // (zero length)
-	sessionStateToken       = 0xe4 // (variable length) ; (introduced in tds 7.4)
-	sspiToken               = 0xed // (variable length)
-	tabNameToken            = 0xa4 // (variable length)
-)
-
-const (
-	// fixed length data types:
-	nulltype     = 0x1f
-	int1type     = 0x30
-	bittype      = 0x32
-	int2type     = 0x34
-	int4type     = 0x38
-	datetim4type = 0x3a
-	flt4type     = 0x3b
-	moneytype    = 0x3c
-	datetimetype = 0x3d
-	flt8type     = 0x3e
-	money4type   = 0x7a
-	int8type     = 0x7f
-
-	// variable length data types:
-	guidtype            = 0x24
-	intntype            = 0x26
-	decimaltype         = 0x37
-	numerictype         = 0x3f
-	bitntype            = 0x68
-	decimalntype        = 0x6a
-	numericntype        = 0x6c
-	fltntype            = 0x6d
-	moneyntype          = 0x6e
-	datetimntype        = 0x6f
-	datentype           = 0x28
-	timentype           = 0x29
-	datetime2ntype      = 0x2a
-	datetimeoffsetntype = 0x2b
-	chartype            = 0x2f
-	varchartype         = 0x27
-	binarytype          = 0x2d
-	varbinarytype       = 0x25
-	bigvarbinarytype    = 0xa5
-	bigvarchartype      = 0xa7
-	bigbinarytype       = 0xad
-	bigchartype         = 0xaf
-	nvarchartype        = 0xe7
-	nchartype           = 0xef
-	xmltype             = 0xf1
-	udttype             = 0xf0
-	texttype            = 0x23
-	imagetype           = 0x22
-	ntexttype           = 0x63
-	ssvarianttype       = 0x62
 )
 
 func (p *parser) init(
@@ -195,12 +103,12 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 
 			return err
 		}
-		if p.message == nil {
+		// This will now never be nil
+		if p.message.messageType == "" {
 			logp.Info("** nil message parsed")
 			break // wait for more data
 		}
 
-		// reset buffer ready to for more packets
 		p.buf.Reset()
 
 		if p.message.isComplete {
@@ -225,75 +133,23 @@ func (p *parser) newMessage(ts time.Time) *message {
 }
 
 func (p *parser) parse() error {
-	/* 2.2.3.1 Packet Header
 
-	// Byte	Usage
-	// 1	Type
-	// 2	Status
-	// 3,4	Length
-	// 5,6	SPID
-	// 7	PacketId
-	// 8	Unused
+	// Empty buffer - need to decide what to do here
+	if p.buf.Len() < 8 {
+		logp.Info("* Empty(ish) buffer")
+		return nil
+	}
 
-	// 2nd byte is a bit field - see if this is the end of the message
-	/* Spec:
-	0x00 "Normal" message.
-	0x01 End of message (EOM). The packet is the last packet in the whole request
-	0x02 (From client to server) Ignore this event (0x01 MUST also be set).
-	0x08 RESETCONNECTION
-		(Introduced in TDS 7.1)
-		(From client to server) Reset this connection before processing event. Only set for event types Batch,
-		RPC, or Transaction Manager request. If clients want to set this bit, it MUST be part of the first packet of
-		the message. This signals the server to clean up the environment state of the connection back to the
-		default environment setting, effectively simulating a logout and a subsequent login, and provides server
-		support for connection pooling. This bit SHOULD be ignored if it is set in a packet that is not the first
-		packet of the message.
-		This status bit MUST NOT be set in conjunction with the RESETCONNECTIONSKIPTRAN bit. Distributed
-		transactions and isolation levels will not be reset.
-	0x10 RESETCONNECTIONSKIPTRAN
-		(Introduced in TDS 7.3)
-		(From client to server) Reset the connection before processing event but do not modify the transaction
-		state (the state will remain the same before and after the reset). The transaction in the session can be a
-		local transaction that is started from the session or it can be a distributed transaction in which the
-		session is enlisted. This status bit MUST NOT be set in conjunction with the RESETCONNECTION bit.
-		Otherwise identical to RESETCONNECTION.
-	*/
-
-	// Second byte dictates whether this is the end of the message
-	header := make([]byte, 8)
-	if _, err := p.buf.Read(header); err != nil {
+	rawMessageType, err := parseHeader(p)
+	if err != nil {
 		return err
 	}
 
-	logp.Info("** header: %x", header)
-
-	// Parse header values
-	batchType := header[0]
-	status := header[1]
-	// don't care about these values for the moment. Probably want to output spid
-	// packetSize := binary.BigEndian.Uint16(header[2:4])
-	// spid := binary.BigEndian.Uint16(header[4:6])
-
-	// todo: create a statusTypes const
-
-	if status&0x02 == 0x02 && status&0x01 == 0x01 {
-		// Ignore message
-		return fmt.Errorf("Ignore message")
-	}
-
-	// We want to create a structure to hold the message if there isn't already one in place
-	if status&0x01 == 0x01 {
-		// This drives whether the event is published. After each parse we call into trans to merge messages
-		p.message.isComplete = true
-	}
-
-	// ** Need to understand what to do if we receive 0x08
-
 	// Change the below to StreamName to match spec?
 	// todo: create a batch types const
-	switch batchType {
+	switch rawMessageType {
 
-	case 0x01:
+	case sqlBatchMessage:
 		p.message.messageType = "SQLBatch"
 		p.message.IsRequest = true
 
@@ -324,14 +180,14 @@ func (p *parser) parse() error {
 		binary.Read(r, binary.LittleEndian, x)
 		logp.Info("** sql batch: %s", string(utf16.Decode(x)))
 
-	case 0x02:
+	case preTds7LoginMessage:
 		p.message.messageType = "Pre-TDS7 Login"
 		p.message.IsRequest = true
-	case 0x03:
+	case rpcMessage:
 		// Can't recreate this from SSMS so will need to write a proggie to exercise RPC
 		p.message.messageType = "RPC"
 		p.message.IsRequest = true
-	case 0x04:
+	case tabularResultMessage:
 		p.message.messageType = "Tabular result"
 		p.message.IsRequest = false
 
@@ -489,7 +345,7 @@ func (p *parser) parse() error {
 			case tabNameToken:
 				return fmt.Errorf("** Not Implemented: tabnameToken %v", tokenType)
 			default:
-				return fmt.Errorf("Unrecognised Token")
+				return fmt.Errorf("Unrecognised Token: %x", tokenType)
 			}
 		}
 
@@ -502,35 +358,29 @@ func (p *parser) parse() error {
 			logp.Info("** remaining buffer: %v", data)
 		}
 
-		// case 0x05:
-	// 	logp.Info("* Type: Unused")
-	case 0x06:
+	case attentionSignalMessage:
 		p.message.messageType = "Attention Signal"
 		p.message.IsRequest = true
-	case 0x07:
+	case bulkLoadDataMessage:
 		p.message.messageType = "Bulk load data"
 		p.message.IsRequest = true
-	case 0x08:
+	case federatedAuthenticationTokenMesage:
 		p.message.messageType = "Federated Authentication Token"
 		p.message.IsRequest = true
-	// case 0x09, 0x0A, 0x0B, 0x0C, 0x0D:
-	// 	logp.Info("* Type: Unused")
-	case 0x0E:
+	case transactionManagerRequestMessage:
 		p.message.messageType = "Transaction Manager Request"
 		p.message.IsRequest = true
-	// case 0x0F:
-	// 	logp.Info("* Type: Unused")
-	case 0x10:
+	case tds7LoginMessage:
 		p.message.messageType = "TDS7 Login"
 		p.message.IsRequest = true
-	case 0x20:
+	case sspiMessage:
 		p.message.messageType = "SSPI"
 		p.message.IsRequest = true
-	case 0x30:
+	case preLoginMessage:
 		p.message.messageType = "Pre-Login"
 		p.message.IsRequest = true
 	default:
-		return fmt.Errorf("Unrecognised TDS Type")
+		return fmt.Errorf("Unrecognised message type: %x", rawMessageType)
 	}
 
 	// Mark buffer as read (even if it's not)
@@ -699,6 +549,40 @@ func parseColumnName(p *parser) (columnName string, err error) {
 	columnName = string(utf16.Decode(x))
 
 	return columnName, nil
+}
+
+func parseHeader(p *parser) (batchType byte, err error) {
+
+	/* 2.2.3.1 Packet Header
+	// Byte	Usage
+	// 1	Type
+	// 2	Status
+	// 3,4	Length
+	// 5,6	SPID		May be worth adding this to the message
+	// 7	PacketId
+	// 8	Unused
+	*/
+
+	// Second byte dictates whether this is the end of the message
+	header := make([]byte, 8)
+	if _, err = p.buf.Read(header); err != nil {
+		return
+	}
+
+	// todo: remove
+	logp.Info("** header: %x", header)
+
+	if header[1]&ignoreStatus == ignoreStatus && header[1]&eomStatus == eomStatus {
+		// todo: Probably want to clear the buffer
+		err = fmt.Errorf("** Ignoring message")
+		return
+	}
+
+	if header[1]&eomStatus == eomStatus {
+		p.message.isComplete = true
+	}
+
+	return header[0], err
 }
 
 // todo: rename this function

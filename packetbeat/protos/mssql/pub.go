@@ -5,6 +5,7 @@ import (
 	"github.com/elastic/beats/v7/libbeat/common"
 	"github.com/elastic/beats/v7/libbeat/logp"
 
+	"github.com/elastic/beats/v7/packetbeat/pb"
 	"github.com/elastic/beats/v7/packetbeat/protos"
 )
 
@@ -29,17 +30,13 @@ func (pub *transPub) onTransaction(tran *mssqlTransaction) error {
 func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 	logp.Info("pub.createEvent()")
 
-	evt := beat.Event{}
+	evt, _ := pb.NewBeatEvent(tran.appTransaction.Ts.Ts)
 
 	// Create our SQL specific fields here
 
 	tran.appTransaction.Event(&evt)
 
-	// Look at the other packetbeat protos and decide which of the ECS fields to include. mysql.go has straight-forward examples
-
-	//pbf.Network.Transport = "tcp"
 	fields := evt.Fields
-	fields["type"] = "mssql" // Mandatory field
 
 	// We should be creating these sub-request values as we parse
 	// mssq.request.*
@@ -60,6 +57,12 @@ func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 	fields["mssql"] = mssql
 
 	logp.Info("** published event: %v", evt)
+
+	// Look at the other packetbeat protos and decide which of the ECS fields to include. mysql.go has straight-forward examples
+
+	// //pbf.Network.Transport = "tcp"
+	// fields := evt.Fields
+	// fields["type"] = "mssql" // Mandatory field (already added?)
 
 	// Code below here predominantly comes from the template - have a review
 
