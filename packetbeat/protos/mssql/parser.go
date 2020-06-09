@@ -24,6 +24,15 @@ MVP todo list:
 - Create a specification file and add all of the constants (and ones for the headers) into there (doesn't seem to be idiomatic)
 */
 
+type messageHeader struct {
+	messageType byte
+	status      byte
+	// length	int (bytes 3&4)
+	// spid 	(bytes 5&6)
+	// packetId	(byte 7)
+
+}
+
 type parser struct {
 	buf       streambuf.Buffer
 	config    *parserConfig
@@ -133,22 +142,25 @@ func (p *parser) newMessage(ts time.Time) *message {
 }
 
 func (p *parser) parse() error {
-
-	// Empty buffer - need to decide what to do here
 	if p.buf.Len() < 8 {
-		logp.Info("* Empty(ish) buffer")
-		return nil
+		// todo: not sure if empty buffer should be an error
+		return fmt.Errorf("Empty(ish) buffer")
 	}
 
-	rawMessageType, err := parseHeader(p)
+	header, err := parseHeader(p)
 	if err != nil {
 		return err
 	}
 
-	// Change the below to StreamName to match spec?
-	// todo: create a batch types const
-	switch rawMessageType {
+	if ignoreMessage(header) {
+		return fmt.Errorf("Ignore message")
+	}
 
+	if isComplete(header) {
+		p.message.isComplete = true
+	}
+
+	switch header.messageType {
 	case sqlBatchMessage:
 		p.message.messageType = "SQLBatch"
 		p.message.IsRequest = true
@@ -380,7 +392,7 @@ func (p *parser) parse() error {
 		p.message.messageType = "Pre-Login"
 		p.message.IsRequest = true
 	default:
-		return fmt.Errorf("Unrecognised message type: %x", rawMessageType)
+		return fmt.Errorf("Unrecognised message type: %x", header.messageType)
 	}
 
 	// Mark buffer as read (even if it's not)
@@ -551,38 +563,25 @@ func parseColumnName(p *parser) (columnName string, err error) {
 	return columnName, nil
 }
 
-func parseHeader(p *parser) (batchType byte, err error) {
+// Create a header struct to represent this instead of just returning the messageType
+func parseHeader(p *parser) (header messageHeader, err error) {
 
-	/* 2.2.3.1 Packet Header
-	// Byte	Usage
-	// 1	Type
-	// 2	Status
-	// 3,4	Length
-	// 5,6	SPID		May be worth adding this to the message
-	// 7	PacketId
-	// 8	Unused
-	*/
-
-	// Second byte dictates whether this is the end of the message
-	header := make([]byte, 8)
-	if _, err = p.buf.Read(header); err != nil {
+	hBytes := make([]byte, 8)
+	if _, err = p.buf.Read(hBytes); err != nil {
 		return
 	}
 
-	// todo: remove
-	logp.Info("** header: %x", header)
+	header.messageType = hBytes[0]
+	header.status = hBytes[1]
+	return
+}
 
-	if header[1]&ignoreStatus == ignoreStatus && header[1]&eomStatus == eomStatus {
-		// todo: Probably want to clear the buffer
-		err = fmt.Errorf("** Ignoring message")
-		return
-	}
+func ignoreMessage(header messageHeader) bool {
+	return header.status&ignoreStatus == ignoreStatus && header.status&eomStatus == eomStatus
+}
 
-	if header[1]&eomStatus == eomStatus {
-		p.message.isComplete = true
-	}
-
-	return header[0], err
+func isComplete(header messageHeader) bool {
+	return header.status&eomStatus == eomStatus
 }
 
 // todo: rename this function
