@@ -15,62 +15,25 @@ import (
 
 /*
 MVP todo list:
-- Fix bug where we can't process 1000 rows (recieve a parser.eof error)
--- So:
-Row values can be spread over multiple packets
-Also applies to nbc rows
-This can't apply to the header
-Double check the spec to see if it's specified the message and token types this can apply to
+Bugs:
+1)
+- Need to handle the doneToken - 0xfd.
+When we have multiple results sets returned this delimits the results:
+-- Do we want to return the individual row counts per dataset?
+--- If so we should also include an aggregated value
+-- We should include a count of result sets
 
-d1 = row token:
-1020   2b 03 00 00 d1 2d 03 00 00 04 2c 03 00 00 d1 2e
-1030   03 00 00 04 2d 03 00 00 d1 2f 03 00 00 04 2e 03
-So the last row token shows a 4 byte int. And then a variable int of length 4 with only the first 2 bytes
+2)
+We need to add support for the envChangeToken (use development triggers an environment change)
 
-Start of the next TDS packet
-First 8 bytes are the packet header and then we have the 00 00 to conclude the last 2 bytes of the previous packet row
-0040   04 01 07 51 00 35 03 00 00 00 d1 30 03 00 00 04
-0050   2f 03 00 00 d1 31 03 00 00 04 30 03 00 00 d1 32
-
-I think we need to read the data length from the header.
-Before we commence any read operation we should check the buffer.len() (inexpensive as this is just an int held in the buffer) and then if there aren't
-enough bytes in the buffer to carry out the read that we are expecting then do 'something'. Possibly just create a byte slice of what is left on the
-parser and then stick that onto the rest of the value that we read from the next packet
-
---->>> First action:
-Can we just wait to see if this is the end of the message and if it isn't then just wait for the next message and append the buffer until
-we have all data?
-
-** Dig through the other protocols to see if this is what they do. Looks like that's the caes for mongodb. Look at Mysql
-
-Max bytes = 10485760 = 10mb
-Default packet size for TDS packets is 4096 (-8 bytes for the header = 4088)
-We could process 2.5k packets before reaching max bytes
-
-2.2.3.1.3 Length
-Length is the size of the packet including the 8 bytes in the packet header. It is the number of bytes from the start of this header to the start of the next packet header.
-Length is a 2-byte, unsigned short int and is represented in network byte order (big-endian).
-The Length value MUST be greater than or equal to 512 bytes and smaller than or equal to 32,767 bytes. The default value is 4,096 bytes.
-Starting with TDS 7.3, the Length MUST be the negotiated packet size when sending a packet from client to server, unless it is the last packet of a request
-(that is, the EOM bit in Status is ON) or the client has not logged in.
-
-2.2.3.2 Packet Data
-Packet data for a given message follows the packet header (see Type in section 2.2.3.1.1 for messages that contain packet data).
-As previously stated, a message can span more than one packet. Because each new message MUST always begin within a new packet,
-a message that spans more than one packet only occurs if the data to be sent exceeds the maximum packet data size, which is computed as
-(negotiated packet size - 8 bytes), where the 8 bytes represents the size of the packet header.
-If a stream spans more than one packet, then the EOM bit of the packet header Status code MUST be set to 0 for every packet header.
-The EOM bit MUST be set to 1 in the last packet to signal that the stream ends. In addition,
-
-
+- Probably don't need it but add in header validation to ensure we don't get differing batch types
 - Add the ECS fields into pub.go/trans.go
-- Support all type in response datasets
+- Support all types in response datasets
 - Neaten up the parser functions (i.e. create parseHeader)
 - We (probably) need to 'properly' convert UCS-2 (instead of just using the default UTF-16 decoding)
 - Validate the header details match between separate packets
 - Add support for RPC calls
 - Add tests
-- Create a specification file and add all of the constants (and ones for the headers) into there (doesn't seem to be idiomatic)
 */
 
 type messageHeader struct {
@@ -87,7 +50,7 @@ type parser struct {
 	config    *parserConfig
 	message   *message
 	onMessage func(m *message) error
-	header    messageHeader
+	header    *messageHeader
 }
 
 type parserConfig struct {
@@ -115,6 +78,7 @@ func (p *parser) init(
 	cfg *parserConfig,
 	onMessage func(*message) error,
 ) {
+	logp.Info("** parser.init() called")
 	*p = parser{
 		buf:       streambuf.Buffer{},
 		config:    cfg,
@@ -140,6 +104,7 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 
 	if len(data) < 8 {
 		// todo: not sure if empty buffer should be an error
+		logp.Info("** Empty buffer")
 		return fmt.Errorf("Empty(ish) buffer")
 	}
 
@@ -151,7 +116,12 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 
 	// Validate the header - check that the header we now have reflects what we were previously processing (if we were already processing)
 
-	// Once validated then set the parse header
+	if p.message == nil {
+		// allocate new message object to be used by parser with current timestamp
+		p.message = p.newMessage(ts)
+	}
+
+	// Need to set to the latest header in case we have now completed:
 	p.header = header
 
 	// This will append the data portion of the packet
@@ -164,9 +134,8 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 		return fmt.Errorf("Ignoring message")
 	}
 
-	// Crack on and get some more data
+	// Wait for more data if incomplete
 	if !isComplete(p.header) {
-		logp.Info("** Waiting for more data")
 		return nil
 	}
 
@@ -175,41 +144,29 @@ func (p *parser) feed(ts time.Time, data []byte) error {
 	// together as we need to capture 'core' information from various packets. Currently we will take the 'core' fields
 	// from the last packet as we only process on completion of a message so this feels wrong
 
-	// why is this in a for loop?
-	for p.buf.Total() > 0 {
+	if err := p.parse(); err != nil {
+		logp.Info("** parse returned error: %s", err)
 
-		// todo: This should be pulled right up to the top of this function as we want to do this when we receive the first packet
-		if p.message == nil {
-			// allocate new message object to be used by parser with current timestamp
-			p.message = p.newMessage(ts)
-		}
+		// Read the rest of the buffer data - no need to check for errors
+		data := make([]byte, p.buf.Len())
+		p.buf.Read(data)
+		logp.Info("** remaining data in buffer: %v", data)
 
-		err := p.parse()
-		if err != nil {
-			logp.Info("** parse returned error: %s", err)
-
-			// Read the rest of the buffer data - no need to check for errors
-			data := make([]byte, p.buf.Len())
-			p.buf.Read(data)
-			logp.Info("** remaining data in buffer: %v", data)
-
-			return err
-		}
-		// This will now never be nil
-		if p.message.messageType == "" {
-			logp.Info("** nil message parsed")
-			break // wait for more data
-		}
-
-		// Do we need this? We should only ever reach here when we have completely processed a message
-		p.buf.Reset()
-
-		if err := p.onMessage(p.message); err != nil {
-			p.message = nil
-			return err
-		}
-		p.message = nil
+		return err
 	}
+
+	if err := p.onMessage(p.message); err != nil {
+		// Do we need to reset if we error?
+		p.buf.Reset()
+		p.header = &messageHeader{}
+		p.message = nil
+		return err
+	}
+
+	// Reset parser
+	p.buf.Reset()
+	p.header = &messageHeader{}
+	p.message = nil
 
 	return nil
 }
@@ -279,6 +236,8 @@ func (p *parser) parse() error {
 				return err
 			}
 
+			logp.Info("\n\n******* tokenType: %x\n", tokenType)
+
 			switch tokenType {
 			case altMetadataToken:
 				return fmt.Errorf("** Not Implemented: altMetadataToken 0x%x", tokenType)
@@ -312,7 +271,7 @@ func (p *parser) parse() error {
 			case dataClassificationToken:
 				return fmt.Errorf("** Not Implemented: dataClassificationToken %v", tokenType)
 			case doneToken:
-				// Revisit this - just skip to the end for the moment
+				// todo: Revisit this (absolute clown) - just skip to the end for the moment
 				p.buf.Advance(p.buf.Len())
 			case doneProcToken:
 				return fmt.Errorf("** Not Implemented: doneProcToken %v", tokenType)
@@ -464,10 +423,7 @@ func (p *parser) parse() error {
 		return fmt.Errorf("Unrecognised message type: %x", p.header.messageType)
 	}
 
-	// Mark buffer as read (even if it's not)
-	p.buf.Advance(p.buf.Len())
-
-	logp.Info("Finished reading packet")
+	logp.Info("Finished reading packet. Remaining data: %d bytes", p.buf.Len())
 
 	return nil
 }
@@ -634,9 +590,11 @@ func parseColumnName(p *parser) (columnName string, err error) {
 	return columnName, nil
 }
 
-func parseHeaderRaw(data []byte) (header messageHeader, err error) {
-	header.messageType = data[0]
-	header.status = data[1]
+func parseHeaderRaw(data []byte) (header *messageHeader, err error) {
+	header = &messageHeader{
+		messageType: data[0],
+		status:      data[1],
+	}
 	return
 }
 
@@ -653,11 +611,11 @@ func parseHeader(p *parser) (header messageHeader, err error) {
 	return
 }
 
-func ignoreMessage(header messageHeader) bool {
+func ignoreMessage(header *messageHeader) bool {
 	return header.status&ignoreStatus == ignoreStatus && header.status&eomStatus == eomStatus
 }
 
-func isComplete(header messageHeader) bool {
+func isComplete(header *messageHeader) bool {
 	return header.status&eomStatus == eomStatus
 }
 

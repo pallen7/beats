@@ -115,9 +115,13 @@ func (tp *mssqlPlugin) Parse(
 ) protos.ProtocolData {
 	defer logp.Recover("Parse mssqlPlugin exception")
 
+	logp.Info("** xx Parse")
+
 	conn := tp.ensureConnection(private)
+
 	st := conn.streams[dir]
 	if st == nil {
+		logp.Info("** xx new stream")
 		st = &stream{}
 		st.parser.init(&tp.parserConfig, func(msg *message) error {
 			return conn.trans.onMessage(tcptuple.IPPort(), dir, msg)
@@ -126,10 +130,12 @@ func (tp *mssqlPlugin) Parse(
 	}
 
 	if err := st.parser.feed(pkt.Ts, pkt.Payload); err != nil {
+		logp.Info("** xx Error: %s", err)
 		debugf("%v, dropping TCP stream for error in direction %v.", err, dir)
 		tp.onDropConnection(conn) // todo: we can remove this if we aren't going to do anything with errors that are returned
 		return nil
 	}
+	logp.Info("** xx return conn")
 	return conn
 }
 
@@ -138,6 +144,7 @@ func (tp *mssqlPlugin) ReceivedFin(
 	tcptuple *common.TCPTuple, dir uint8,
 	private protos.ProtocolData,
 ) protos.ProtocolData {
+	logp.Info("** ReceivedFin")
 	return private
 }
 
@@ -146,6 +153,7 @@ func (tp *mssqlPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 	nbytes int,
 	private protos.ProtocolData,
 ) (protos.ProtocolData, bool) {
+	logp.Info("** GapInStream")
 	conn := getConnection(private)
 	if conn != nil {
 		tp.onDropConnection(conn)
