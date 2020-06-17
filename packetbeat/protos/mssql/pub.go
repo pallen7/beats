@@ -27,31 +27,47 @@ func (pub *transPub) onTransaction(tran *mssqlTransaction) error {
 	return nil
 }
 
+type table struct {
+	rowcount int
+}
+
 func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 	logp.Info("pub.createEvent()")
+
+	// todo: if we have no request type we should not create an event - not sure where this should live
 
 	evt, _ := pb.NewBeatEvent(tran.appTransaction.Ts.Ts)
 
 	// Create our SQL specific fields here
-
 	tran.appTransaction.Event(&evt)
 
 	fields := evt.Fields
 
-	// We should be creating these sub-request values as we parse
-	// mssq.request.*
 	mssqlrequest := common.MapStr{
 		"request_type": tran.requestType,
 	}
 
+	// Fairly arbitrary truncation:
+	// todo: only output sql_batch for the SQL batch request type
+	if len(tran.sqlBatch) > 500 {
+		mssqlrequest["sql_batch"] = tran.sqlBatch[0:497] + "..."
+	} else {
+		mssqlrequest["sql_batch"] = tran.sqlBatch
+	}
+
 	mssqlresponse := common.MapStr{
 		"rows_returned": tran.rowsReturned,
+		"result_sets":   tran.resultSets,
 	}
 
 	// mssql.event:
 	mssql := common.MapStr{
-		"request":  mssqlrequest,
-		"response": mssqlresponse,
+		"request": mssqlrequest,
+	}
+
+	// todo: Need a better way to coordinate this. Only log responses for request types that we process
+	if tran.requestType == "Bulk load data" || tran.requestType == "SQLBatch" || tran.requestType == "RPC" {
+		mssql["response"] = mssqlresponse
 	}
 
 	fields["mssql"] = mssql
@@ -121,3 +137,51 @@ func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 
 	return evt
 }
+
+/*
+Experimentation:
+
+The below worked to produce nested objects but not sure how much value we get out of the granular breakdown of each result. It is
+possible to aggregate on the nested elements but doesn't seem to add much value?
+
+	mapColumna1 := common.MapStr{"name": "id", "type": "int"}
+	mapColumna2 := common.MapStr{"name": "address", "type": "varchar(20)"}
+
+	mapColumnb1 := common.MapStr{"name": "sno", "type": "bigint"}
+
+	mapColumnsa := make([]common.MapStr, 2)
+	mapColumnsb := make([]common.MapStr, 1)
+
+	mapColumnsa[0] = mapColumna1
+	mapColumnsa[1] = mapColumna2
+	mapColumnsb[0] = mapColumnb1
+
+	mapTables := make([]common.MapStr, 2)
+	mapTables[0] = common.MapStr{"rows_returned": 10, "columns": mapColumnsa}
+	mapTables[1] = common.MapStr{"rows_returned": 20, "columns": mapColumnsb}
+
+	Produced in Elastic/Kibana:
+	{
+	"rows_returned": 10,
+	"columns": [
+		{
+		"name": "id",
+		"type": "int"
+		},
+		{
+		"name": "address",
+		"type": "varchar(20)"
+		}
+	]
+	},
+	{
+	"rows_returned": 20,
+	"columns": [
+		{
+		"type": "bigint",
+		"name": "sno"
+		}
+	]
+	}
+
+*/

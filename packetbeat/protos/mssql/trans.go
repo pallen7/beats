@@ -18,6 +18,8 @@ type mssqlTransaction struct {
 	// SQL Specific fields
 	requestType  string
 	rowsReturned int
+	resultSets   int
+	sqlBatch     string
 
 	onTransaction transactionHandler
 }
@@ -78,6 +80,7 @@ func (trans *mssqlTransaction) onRequest(
 
 	trans.appTransaction.InitWithMsg("mssql", &msg.Message)
 	trans.requestType = msg.messageType
+	trans.sqlBatch = msg.sqlBatch
 	return nil
 }
 
@@ -94,6 +97,7 @@ func (trans *mssqlTransaction) onResponse(
 	// todo: Check that we have a request on the transaction. If we don't then return an error and dump this response
 
 	trans.rowsReturned = msg.rowsReturned
+	trans.resultSets = msg.resultSets
 
 	// todo: Sort this out as it looks a bit weird calling a function on the trans variable and also passing that as a parameter
 	if err := trans.onTransaction(trans); err != nil {

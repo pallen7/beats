@@ -93,6 +93,6 @@ const (
 	federatedAuthenticationTokenMesage = 0x08
 	transactionManagerRequestMessage   = 0x0e
 	tds7LoginMessage                   = 0x10
-	sspiMessage                        = 0x20
-	preLoginMessage                    = 0x30
+	sspiMessage                        = 0x11
+	preLoginMessage                    = 0x12
 )
