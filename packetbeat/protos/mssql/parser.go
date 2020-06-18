@@ -19,12 +19,12 @@ Finish off adding support for all datatypes
 
 Bugs:
 ** Error: Not Implemented: sessionStateToken 0xe4
-** Error: Ignoring message
+** Error: Not Implemented: orderToken 0xa9
 ** Error: Not Implemented: RPC message 0x3
+** Error: Ignoring message
 
 - Probably don't need it but add in header validation to ensure we don't get differing batch types
 - Add the ECS fields into pub.go/trans.go
-- Support all types in response datasets
 - Validate the header details match between separate packets
 - Add support for RPC calls
 - Add tests
@@ -398,16 +398,10 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 	/*
 		todo:
 		// variable length data types:
-		guidtype            = 0x24
 		decimaltype         = 0x37
 		numerictype         = 0x3f
 		decimalntype        = 0x6a
 		numericntype        = 0x6c
-		fltntype            = 0x6d
-		moneyntype          = 0x6e
-		datetimntype        = 0x6f
-		datentype           = 0x28
-		timentype           = 0x29
 		datetime2ntype      = 0x2a
 		datetimeoffsetntype = 0x2b
 		chartype            = 0x2f
@@ -427,6 +421,7 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 	colType = make([]byte, columnCount)
 
 	for i := 0; i < columnCount; i++ {
+
 		// Skip usertype & flags
 		p.buf.Advance(6)
 
@@ -435,18 +430,22 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 			return
 		}
 
+		// See: 2.2.5.6 Type Info Rule Definition
 		switch colType[i] {
 		case
-			nulltype, int1type, bittype, int2type, int4type, datetim4type, flt4type, moneytype,
-			datetimetype, flt8type, money4type, int8type:
+			bittype, int1type, int2type, int4type, int8type,
+			datetim4type, datetimetype, datentype,
+			money4type, moneytype,
+			flt4type, flt8type,
+			nulltype:
 
 			if _, err = readColumnName(p); err != nil {
 				return
 			}
 
-		case intntype, bitntype:
-			// 1-byte size
-			if err := p.buf.Advance(1); err != nil {
+		case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, timentype:
+			// 1-byte length
+			if err = p.buf.Advance(1); err != nil {
 				return colType, err
 			}
 			if _, err = readColumnName(p); err != nil {
@@ -455,7 +454,7 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 
 		case bigvarchartype, nvarchartype:
 			// 5-byte collation, followed by 2-byte max length
-			if err := p.buf.Advance(7); err != nil {
+			if err = p.buf.Advance(7); err != nil {
 				return colType, err
 			}
 			if _, err = readColumnName(p); err != nil {
@@ -487,33 +486,18 @@ func isComplete(header *messageHeader) bool {
 	return header.status&eomStatus == eomStatus
 }
 
-// todo: rename this function
-// todo: support all data types
 func advanceBufferForDataType(p *parser, dataType byte) error {
 	switch dataType {
 	/*
 		todo:
 		// fixed length data types:
 		nulltype     = 0x1f
-		bittype      = 0x32
-		datetim4type = 0x3a
-		flt4type     = 0x3b
-		moneytype    = 0x3c
-		datetimetype = 0x3d
-		flt8type     = 0x3e
-		money4type   = 0x7a
 
 		// variable length data types:
-		guidtype            = 0x24
 		decimaltype         = 0x37
 		numerictype         = 0x3f
 		decimalntype        = 0x6a
 		numericntype        = 0x6c
-		fltntype            = 0x6d
-		moneyntype          = 0x6e
-		datetimntype        = 0x6f
-		datentype           = 0x28
-		timentype           = 0x29
 		datetime2ntype      = 0x2a
 		datetimeoffsetntype = 0x2b
 		chartype            = 0x2f
@@ -533,12 +517,13 @@ func advanceBufferForDataType(p *parser, dataType byte) error {
 		p.buf.Advance(1)
 	case int2type:
 		p.buf.Advance(2)
-	case int4type:
+	case int4type, datetim4type, flt4type, money4type:
 		p.buf.Advance(4)
-	case int8type:
+	case int8type, moneytype, datetimetype, flt8type:
 		p.buf.Advance(8)
-	case intntype, bitntype:
-		len, err := p.buf.ReadByte() // First byte specifies length
+	case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, datentype, timentype:
+		// Variable length - specified by first byte
+		len, err := p.buf.ReadByte()
 		if err != nil {
 			return err
 		}
