@@ -13,15 +13,35 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
+// TDS 7.4 = SQL Server 2012+
+// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/135d0ebe-5c4c-4a94-99bf-1811eccb9f4a
+
 /*
 MVP todo list:
-Finish off adding support for all datatypes
+1) Token support:
+- envChangeToken 	- USE Development
+- infoToken 		- PRINT 'hello'
+- doneInProcToken	- EXEC return0 1
+
+2) Finish off adding support for all datatypes
+
+3) Add RPC support (will need test app)
+
+4) Add a readme:
+- Todo list
+- Messages with specific SQL fields:
+-- SQL Batch (tokenless stream)
+-- RPC (token stream)
+-- Bulk Load (token stream) - support?
+-- Both types return a Tabular Result (token stream)
+
 
 Bugs:
-** Error: Not Implemented: sessionStateToken 0xe4
+** Error: Not Implemented: sessionStateToken 0xe4 (hmmm - is this off the back of sql batch or rpc call?)
 ** Error: Not Implemented: orderToken 0xa9
 ** Error: Not Implemented: RPC message 0x3
 ** Error: Ignoring message
+** Sort out how to handle empty(ish) buffers
 
 - Probably don't need it but add in header validation to ensure we don't get differing batch types
 - Add the ECS fields into pub.go/trans.go
@@ -219,141 +239,13 @@ func (p *parser) parse() error {
 			There are tabular results that we want to dismiss:
 			Many request types produce tabular results. We don't care abour reading the data of a lot of them
 		*/
-		if !(p.originatingRequestType == "Bulk load data" || p.originatingRequestType == "SQLBatch" || p.originatingRequestType == "RPC") || p.originatingRequestType == "" {
+		if !(p.originatingRequestType == "SQLBatch" || p.originatingRequestType == "RPC") || p.originatingRequestType == "" {
 			p.buf.Advance(p.buf.Len())
 			break
 		}
 
-		// The below is effectively our parseTokenStream function:
-		for p.buf.Len() > 0 {
-			// We need to loop around the below and pull off each token as we go
-			tokenType, err := p.buf.ReadByte()
-			if err != nil {
-				return err
-			}
-
-			switch tokenType {
-			case altMetadataToken:
-				return fmt.Errorf("Not Implemented: altMetadataToken 0x%x", tokenType)
-			case altRowToken:
-				return fmt.Errorf("Not Implemented: altRowToken 0x%x", tokenType)
-			case colMetadataToken:
-				columnCount, err := p.readUInt16(littleEndian)
-				if err != nil {
-					return err
-				}
-				// todo: We need to support Encryption Keys (cektable) - for the moment just skip
-				p.buf.Advance(2)
-
-				if p.message.colDataTypes, err = parseColumnMetadata(p, int(columnCount)); err != nil {
-					return err
-				}
-			case colInfoToken:
-				return fmt.Errorf("Not Implemented: colInfoToken 0x%x", tokenType)
-			case dataClassificationToken:
-				return fmt.Errorf("Not Implemented: dataClassificationToken 0x%x", tokenType)
-			case doneToken:
-				// todo: Revisit this - can we pull our row count for the current dataset from here?
-				/*
-					This token is used to indicate the completion of a SQL statement.
-					As multiple SQL statements can be sent to the server in a single SQL batch, multiple DONE tokens can
-					be generated. In this case, all but the final DONE token will have a Status value with DONE_MORE bit set (details follow).
-
-					Status = USHORT
-					CurCmd = USHORT
-					DoneRowCount = LONG / ULONGLONG;
-					(Changed to ULONGLONG in TDS 7.2)
-
-					DONE =	TokenType
-							Status
-							CurCmd
-							DoneRowCount
-				*/
-
-				// todo: we should really read the row count from here:
-				// For the moment just ignore the 12 bytes
-				p.buf.Advance(12)
-				p.message.resultSets++
-
-				//p.buf.Advance(p.buf.Len())
-			case doneProcToken:
-				return fmt.Errorf("Not Implemented: doneProcToken 0x%x", tokenType)
-			case doneInProcToken:
-				return fmt.Errorf("Not Implemented: doneInProcToken 0x%x", tokenType)
-			case envChangeToken:
-				return fmt.Errorf("Not Implemented: envChangeToken 0x%x", tokenType)
-			case errorToken:
-				return fmt.Errorf("Not Implemented: errorToken 0x%x", tokenType)
-			case featureExtackToken:
-				return fmt.Errorf("Not Implemented: featureExtackToken 0x%x", tokenType)
-			case fedAuthInfoToken:
-				return fmt.Errorf("Not Implemented: fedAuthInfoToken 0x%x", tokenType)
-			case infoToken:
-				return fmt.Errorf("Not Implemented: infoToken 0x%x", tokenType)
-			case loginAckToken:
-				return fmt.Errorf("Not Implemented: loginAckToken 0x%x", tokenType)
-			case nbcRowToken:
-				/*
-					MS-TDS Spec - Page 106:
-					NBCROW, introduced in TDS 7.3.B, is used to send a row as defined by the COLMETADATA token to the client
-					with null bitmap compression. Null bitmap compression is implemented by using a single bit to specify
-					whether the column is null or not null and also by removing all null column values from the row.
-					Removing the null column values (which can be up to 8 bytes per null instance) from the row provides
-					the compression. The null bitmap contains one bit for each column defined in COLMETADATA.
-					In the null bitmap, a bit value of 1 means that the column is null and therefore not present in the row,
-					and a bit value of 0 means that the column is not null and is present in the row.
-					The null bitmap is always rounded up to the nearest multiple of 8 bits, so there might be 1 to 7 leftover
-					reserved bits at the end of the null bitmap in the last byte of the null bitmap. NBCROW is only used by
-					TDS result set streams from server to client. NBCROW MUST NOT be used in BulkLoadBCP streams.
-					NBCROW MUST NOT be used in TVP row streams.
-				*/
-
-				// Up the row count
-				p.message.rowsReturned++
-
-				nbcLength := len(p.message.colDataTypes) / 8
-				if len(p.message.colDataTypes)%8 != 0 {
-					nbcLength++
-				}
-
-				nbc := make([]byte, nbcLength)
-				if _, err := p.buf.Read(nbc); err != nil {
-					return err
-				}
-
-				for i := 0; i < len(p.message.colDataTypes); i++ {
-					// Logic based on: https://play.golang.org/p/copjZW4Pl8_r
-					nbcIdx := i / 8
-					if nbc[nbcIdx]&1 == 1 {
-						nbc[nbcIdx] = nbc[nbcIdx] >> 1
-						continue
-					}
-					nbc[nbcIdx] = nbc[nbcIdx] >> 1
-					advanceBufferForDataType(p, p.message.colDataTypes[i])
-				}
-			case offsetToken:
-				return fmt.Errorf("Not Implemented: offsetToken 0x%x", tokenType)
-			case orderToken:
-				return fmt.Errorf("Not Implemented: orderToken 0x%x", tokenType)
-			case returnStatusToken:
-				return fmt.Errorf("Not Implemented: returnStatusToken 0x%x", tokenType)
-			case returnValueToken:
-				return fmt.Errorf("Not Implemented: returnValueToken 0x%x", tokenType)
-			case rowToken:
-				p.message.rowsReturned++
-
-				for i := 0; i < len(p.message.colDataTypes); i++ {
-					advanceBufferForDataType(p, p.message.colDataTypes[i])
-				}
-			case sessionStateToken:
-				return fmt.Errorf("Not Implemented: sessionStateToken 0x%x", tokenType)
-			case sspiToken:
-				return fmt.Errorf("Not Implemented: sspiToken 0x%x", tokenType)
-			case tabNameToken:
-				return fmt.Errorf("Not Implemented: tabnameToken 0x%x", tokenType)
-			default:
-				return fmt.Errorf("Unrecognised Token: 0x%x", tokenType)
-			}
+		if err := parseTokenStream(p); err != nil {
+			return err
 		}
 
 	case attentionSignalMessage:
@@ -363,7 +255,7 @@ func (p *parser) parse() error {
 	case bulkLoadDataMessage:
 		p.message.messageType = "Bulk load data"
 		p.message.IsRequest = true
-		return fmt.Errorf("Not Implemented: Bulk Load 0x%x", p.header.messageType)
+		p.buf.Advance(p.buf.Len())
 	case federatedAuthenticationTokenMesage:
 		p.message.messageType = "Federated Authentication Token"
 		p.message.IsRequest = true
@@ -393,7 +285,195 @@ func (p *parser) parse() error {
 	return nil
 }
 
+func parseTokenStream(p *parser) error {
+	// The below is effectively our parseTokenStream function:
+	for p.buf.Len() > 0 {
+		// We need to loop around the below and pull off each token as we go
+		tokenType, err := p.buf.ReadByte()
+		if err != nil {
+			return err
+		}
+
+		switch tokenType {
+		case colMetadataToken:
+			columnCount, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			// todo: We need to support Encryption Keys (cektable) - for the moment just skip
+			p.buf.Advance(2)
+
+			if p.message.colDataTypes, err = parseColumnMetadata(p, int(columnCount)); err != nil {
+				return err
+			}
+		case colInfoToken:
+			return fmt.Errorf("Not Implemented: colInfoToken 0x%x", tokenType)
+		case dataClassificationToken:
+			return fmt.Errorf("Not Implemented: dataClassificationToken 0x%x", tokenType)
+		case doneToken:
+			// todo: Revisit this - can we pull our row count for the current dataset from here?
+			/*
+				This token is used to indicate the completion of a SQL statement.
+				As multiple SQL statements can be sent to the server in a single SQL batch, multiple DONE tokens can
+				be generated. In this case, all but the final DONE token will have a Status value with DONE_MORE bit set (details follow).
+
+				Status = USHORT
+				CurCmd = USHORT
+				DoneRowCount = LONG / ULONGLONG;
+				(Changed to ULONGLONG in TDS 7.2)
+
+				DONE =	TokenType
+						Status
+						CurCmd
+						DoneRowCount
+			*/
+
+			// todo: we should really read the row count from here:
+			// For the moment just ignore the 12 bytes
+			p.buf.Advance(12)
+			p.message.resultSets++
+
+			//p.buf.Advance(p.buf.Len())
+		case doneProcToken:
+			return fmt.Errorf("Not Implemented: doneProcToken 0x%x", tokenType)
+		case doneInProcToken:
+			return fmt.Errorf("Not Implemented: doneInProcToken 0x%x", tokenType)
+		case envChangeToken:
+			streamLen, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
+			}
+		case errorToken:
+			streamLen, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
+			}
+		case infoToken:
+			streamLen, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
+			}
+		case nbcRowToken:
+			/*
+				MS-TDS Spec - Page 106:
+				NBCROW, introduced in TDS 7.3.B, is used to send a row as defined by the COLMETADATA token to the client
+				with null bitmap compression. Null bitmap compression is implemented by using a single bit to specify
+				whether the column is null or not null and also by removing all null column values from the row.
+				Removing the null column values (which can be up to 8 bytes per null instance) from the row provides
+				the compression. The null bitmap contains one bit for each column defined in COLMETADATA.
+				In the null bitmap, a bit value of 1 means that the column is null and therefore not present in the row,
+				and a bit value of 0 means that the column is not null and is present in the row.
+				The null bitmap is always rounded up to the nearest multiple of 8 bits, so there might be 1 to 7 leftover
+				reserved bits at the end of the null bitmap in the last byte of the null bitmap. NBCROW is only used by
+				TDS result set streams from server to client. NBCROW MUST NOT be used in BulkLoadBCP streams.
+				NBCROW MUST NOT be used in TVP row streams.
+			*/
+
+			// Up the row count
+			p.message.rowsReturned++
+
+			nbcLength := len(p.message.colDataTypes) / 8
+			if len(p.message.colDataTypes)%8 != 0 {
+				nbcLength++
+			}
+
+			nbc := make([]byte, nbcLength)
+			if _, err := p.buf.Read(nbc); err != nil {
+				return err
+			}
+
+			for i := 0; i < len(p.message.colDataTypes); i++ {
+				// Logic based on: https://play.golang.org/p/copjZW4Pl8_r
+				nbcIdx := i / 8
+				if nbc[nbcIdx]&1 == 1 {
+					nbc[nbcIdx] = nbc[nbcIdx] >> 1
+					continue
+				}
+				nbc[nbcIdx] = nbc[nbcIdx] >> 1
+				advanceBufferForDataType(p, p.message.colDataTypes[i])
+			}
+		case orderToken:
+			streamLen, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
+			}
+		case returnStatusToken:
+			return fmt.Errorf("Not Implemented: returnStatusToken 0x%x", tokenType)
+		case returnValueToken:
+			return fmt.Errorf("Not Implemented: returnValueToken 0x%x", tokenType)
+		case rowToken:
+			p.message.rowsReturned++
+
+			for i := 0; i < len(p.message.colDataTypes); i++ {
+				advanceBufferForDataType(p, p.message.colDataTypes[i])
+			}
+		case tabNameToken:
+			return fmt.Errorf("Not Implemented: tabnameToken 0x%x", tokenType)
+
+		// ** Unsupported token types
+		// Deprecated in TDS 7.4:
+		case altMetadataToken:
+			return fmt.Errorf("Unsupported: altMetadataToken 0x%x", tokenType)
+		case altRowToken:
+			return fmt.Errorf("Not Implemented: altRowToken 0x%x", tokenType)
+		// Token removed in TDS 7.2:
+		case offsetToken:
+			return fmt.Errorf("Unsupported token: offsetToken 0x%x", tokenType)
+		// Don't expect to receive these for SQL batch or RPC transactions:
+		case featureExtackToken:
+			return fmt.Errorf("Unsupported token: featureExtackToken 0x%x", tokenType)
+		case fedAuthInfoToken:
+			return fmt.Errorf("Unsupported token: fedAuthInfoToken 0x%x", tokenType)
+		case loginAckToken:
+			return fmt.Errorf("Unsupported token: loginAckToken 0x%x", tokenType)
+		case sessionStateToken:
+			return fmt.Errorf("Unsupported token: sessionStateToken 0x%x", tokenType)
+		case sspiToken:
+			return fmt.Errorf("Unsupported token: sspiToken 0x%x", tokenType)
+		default:
+			return fmt.Errorf("Unrecognised Token: 0x%x", tokenType)
+		}
+	}
+	return nil
+}
+
 func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error) {
+
+	/* 2.2.7.4 - COLMETADATA token
+	   Notes:
+
+		COLMETADATA =
+		- TokenType
+		- Count
+		- [CekTable] -->>
+			Set based on COLUMNENCRYPTION. Specified in the login7 stream and a FEATUREEXTACK message
+			As we only deal with messages at a packet level we won't have this information
+			For the moment we will have to fail inelegantly - need to test
+		- NoMetaData / (1*ColumnData) -->> todo: NoMetaData. Count will be 0xFFFF
+
+		ColumnData =
+		- UserType (4 bytes)
+		- Flags (2 bytes)
+		- TYPE_INFO
+		- [TableName]
+		- [CryptoMetaData]
+		- ColName
+
+	   - The TableName element is specified only if a text, ntext, or image column is included in the result set.
+
+	*/
 
 	/*
 		todo:
@@ -422,7 +502,8 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 
 	for i := 0; i < columnCount; i++ {
 
-		// Skip usertype & flags
+		// Skip usertype (4 bytes) & flags (2 bytes)
+		// Validate that the column is not encrypted (See 2.2.5.7 for EK Rule definitions). Fail if it is
 		p.buf.Advance(6)
 
 		colType[i], err = p.buf.ReadByte()
@@ -431,6 +512,7 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 		}
 
 		// See: 2.2.5.6 Type Info Rule Definition
+		// Note (DATE MUST NOT have a TYPE_VARLEN. The value is either 3 bytes or 0 bytes (null).)
 		switch colType[i] {
 		case
 			bittype, int1type, int2type, int4type, int8type,
@@ -453,7 +535,7 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 			}
 
 		case bigvarchartype, nvarchartype:
-			// 5-byte collation, followed by 2-byte max length
+			// 5-byte collation (2.2.5.1.2), followed by 2-byte max length
 			if err = p.buf.Advance(7); err != nil {
 				return colType, err
 			}
