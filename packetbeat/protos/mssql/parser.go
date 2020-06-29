@@ -22,31 +22,9 @@ MVP todo list:
 Add support for all tokens received in responses
 Don't need to read all of the data but we do care about the COLUMNENCRYPTION (FEATUREEXTACK)
 
-1) bug:
-// When calling from SSMS we need to process CEKTable in the ColumnMeta
-// When called from Go test harness we don't have a CEKTable
-// Either because an older version of TDS is being used (not sure how we check this) or there is no CEK table.
-// Revisit and figure this out
-
-
-1) Token support:
-** Error: Unsupported token: featureExtackToken 0xae
-** Error: Not Implemented: returnStatusToken 0x79
-** Error: Ignoring message
--- Bug when processing RPC message during logon:
-** ProcName:
-	ۧँ퀄㐀ĆSELECT
-	dtb.collation_name AS [Collation],
-	dtb.name AS [DatabaseName2]
-	FROM
-	master.sys.databases AS dtb
-	WHERE
-	(dtb.name=@_msparam_0) 㓧ऀ퀄㐀4@_msparam_0 nvarchar(4000)䀋开洀猀瀀愀爀愀洀开　 䃧ट퀄㐀
-																						master
-
 2) Finish off adding support for all datatypes
 
-3) Add RPC support (will need test app)
+3) Output list of parameters for proc calls (see experimentation at bottom of pub.go)
 
 4) Add a readme:
 - Todo list
@@ -56,18 +34,9 @@ Don't need to read all of the data but we do care about the COLUMNENCRYPTION (FE
 -- Bulk Load (token stream) - support?
 -- Both types return a Tabular Result (token stream)
 
-
-Bugs:
-** Error: Not Implemented: sessionStateToken 0xe4 (hmmm - is this off the back of sql batch or rpc call?)
-** Error: Not Implemented: orderToken 0xa9
-** Error: Not Implemented: RPC message 0x3
-** Error: Ignoring message
-** Sort out how to handle empty(ish) buffers
-
 - Probably don't need it but add in header validation to ensure we don't get differing batch types
 - Add the ECS fields into pub.go/trans.go
 - Validate the header details match between separate packets
-- Add support for RPC calls
 - Add tests
 */
 
@@ -108,6 +77,7 @@ type message struct {
 	rowsReturned int
 	resultSets   int
 	sqlBatch     string
+	procName     string
 }
 
 // Error code if stream exceeds max allowed size on append.
@@ -265,33 +235,22 @@ func (p *parser) parse(columnEncryption *bool) error {
 		}
 		p.buf.Advance(int(headerLen) - 4)
 
-		// Read the name of the proc
 		nameLen, err := p.readUInt16(littleEndian)
 		if err != nil {
 			return err
 		}
-		procName, err := p.readUCS2String(int(nameLen))
-		if err != nil {
-			return err
+
+		// 0xFFFF represents a proc id
+		if int(nameLen) != 65535 {
+			logp.Info("** nameLen: %d**", int(nameLen))
+			if p.message.procName, err = p.readUCS2String(int(nameLen) * 2); err != nil {
+				return err
+			}
 		}
-		logp.Info("** ProcName: %s", procName)
 
-		// Print out the rest of the proc stream
-		data := make([]byte, p.buf.Len())
-		p.buf.Read(data)
+		logp.Info("** procName: %s", p.message.procName)
 
-		/*
-			RPCRequest = ALL_HEADERS
-			RPCReqBatch
-			*((BatchFlag / NoExecFlag) RPCReqBatch)
-		*/
-
-		/*
-			ProcID = USHORT
-			ProcIDSwitch = %xFF %xFF
-			ProcName = US_VARCHAR (16bit unsigned int length)
-			NameLenProcID = ProcName
-		*/
+		p.buf.Advance(p.buf.Len())
 
 	case tabularResultMessage:
 
@@ -303,8 +262,6 @@ func (p *parser) parse(columnEncryption *bool) error {
 			There are tabular results that we want to dismiss:
 			Many request types produce tabular results. We don't care abour reading the data of a lot of them
 		*/
-		// if !(p.originatingRequestType == "SQLBatch" || p.originatingRequestType == "RPC" || p.originatingRequestType == "Login ") || p.originatingRequestType == "" {
-		// The below are specifically tokenless streams that I don't think we care about
 		if p.originatingRequestType == "Pre-Login" || p.originatingRequestType == "Attention Signal" {
 			p.buf.Advance(p.buf.Len())
 			break
@@ -333,25 +290,6 @@ func (p *parser) parse(columnEncryption *bool) error {
 	case tds7LoginMessage:
 		p.message.messageType = "TDS7 Login"
 		p.message.IsRequest = true
-
-		/*
-			LOGIN7 =
-				Length			= DWORD
-				TDSVersion		= DWORD
-				PacketSize		= DWORD
-				ClientProgVer	= DWORD
-				ClientPID		= DWORD
-				ConnectionID	= DWORD
-				OptionFlags1	= BYTE
-				OptionFlags2	= BYTE
-				TypeFlags (FRESERVEDBYTE / OptionFlags3) = BYTE
-				ClientTimeZone	= LONG
-				ClientLCID		= 4 BYTES
-				OffsetLength	= 26x USHORT + 6BYTE + DWORD
-				Data
-				[FeatureExt]
-		*/
-
 		p.buf.Advance(p.buf.Len())
 	case sspiMessage:
 		p.message.messageType = "SSPI"
@@ -466,8 +404,6 @@ func parseTokenStream(p *parser, columnEncryption *bool) error {
 					return err
 				}
 			}
-
-			return fmt.Errorf("Unsupported token: featureExtackToken 0x%x", tokenType)
 		case infoToken:
 			streamLen, err := p.readUInt16(littleEndian)
 			if err != nil {
@@ -831,3 +767,52 @@ func (p *parser) readUCS2String(length int) (s string, err error) {
 	s = string(utf16.Decode(uChars))
 	return
 }
+
+// Carped straight from utf-16
+// We were getting unprintables without hitting the surrogate (or invalid surrogate range)
+// const (
+// 	// 0xd800-0xdc00 encodes the high 10 bits of a pair.
+// 	// 0xdc00-0xe000 encodes the low 10 bits of a pair.
+// 	// the value is those 20 bits plus 0x10000.
+// 	surr1 = 0xd800
+// 	surr2 = 0xdc00
+// 	surr3 = 0xe000
+
+// 	surrSelf = 0x10000
+// )
+
+// func decode(s []uint16) []rune {
+// 	a := make([]rune, len(s))
+// 	n := 0
+// 	for i := 0; i < len(s); i++ {
+// 		switch r := s[i]; {
+// 		case r < surr1, surr3 <= r:
+// 			// normal rune
+// 			a[n] = rune(r)
+// 		case surr1 <= r && r < surr2 && i+1 < len(s) &&
+// 			surr2 <= s[i+1] && s[i+1] < surr3:
+// 			logp.Info("\n\n ** VALID SURROGATE **\n\n")
+// 			// valid surrogate sequence
+// 			a[n] = decodeRune(rune(r), rune(s[i+1]))
+// 			i++
+// 		default:
+// 			// invalid surrogate sequence
+// 			logp.Info("\n\n ** INVALID SURROGATE **\n\n")
+// 			a[n] = replacementChar
+// 		}
+// 		n++
+// 	}
+// 	return a[:n]
+// }
+
+// func decodeRune(r1, r2 rune) rune {
+// 	if surr1 <= r1 && r1 < surr2 && surr2 <= r2 && r2 < surr3 {
+// 		return (r1-surr1)<<10 | (r2 - surr2) + surrSelf
+// 	}
+// 	return replacementChar
+// }
+
+// const (
+// 	replacementChar = '\uFFFD'     // Unicode replacement character
+// 	maxRune         = '\U0010FFFF' // Maximum valid Unicode code point.
+// )

@@ -55,6 +55,8 @@ func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 		mssqlrequest["sql_batch"] = tran.sqlBatch
 	}
 
+	mssqlrequest["proc_name"] = tran.procName
+
 	mssqlresponse := common.MapStr{
 		"rows_returned": tran.rowsReturned,
 		"result_sets":   tran.resultSets,

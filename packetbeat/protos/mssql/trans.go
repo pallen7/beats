@@ -20,6 +20,7 @@ type mssqlTransaction struct {
 	rowsReturned int
 	resultSets   int
 	sqlBatch     string
+	procName     string
 
 	onTransaction transactionHandler
 }
@@ -81,6 +82,7 @@ func (trans *mssqlTransaction) onRequest(
 	trans.appTransaction.InitWithMsg("mssql", &msg.Message)
 	trans.requestType = msg.messageType
 	trans.sqlBatch = msg.sqlBatch
+	trans.procName = msg.procName
 	return nil
 }
 
