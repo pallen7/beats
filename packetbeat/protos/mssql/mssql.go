@@ -20,8 +20,9 @@ type mssqlPlugin struct {
 
 // Application Layer tcp stream data to be stored on tcp connection context.
 type connection struct {
-	streams [2]*stream
-	trans   mssqlTransaction
+	streams          [2]*stream
+	trans            mssqlTransaction
+	columnEncryption bool
 }
 
 // Uni-directional tcp stream state for parsing messages.
@@ -97,7 +98,9 @@ func (tp *mssqlPlugin) setFromConfig(config *tdsConfig) error {
 // ConnectionTimeout returns the per stream connection timeout.
 // Return <=0 to set default tcp module transaction timeout.
 func (tp *mssqlPlugin) ConnectionTimeout() time.Duration {
-	return tp.transConfig.transactionTimeout
+	//return tp.transConfig.transactionTimeout
+	// todo: This should align with or exceed SQL Server timeout so that we can retain the ColumnEncryption info
+	return time.Second * 30
 }
 
 // GetPorts returns the ports numbers packets shall be processed for.
@@ -115,6 +118,7 @@ func (tp *mssqlPlugin) Parse(
 ) protos.ProtocolData {
 	defer logp.Recover("Parse mssqlPlugin exception")
 
+	// todo: conn is the connection.data (see tcp.go) not the connection. Rename this
 	conn := tp.ensureConnection(private)
 
 	st := conn.streams[dir]
@@ -127,12 +131,14 @@ func (tp *mssqlPlugin) Parse(
 		conn.streams[dir] = st
 	}
 
-	if err := st.parser.feed(pkt.Ts, pkt.Payload, conn.trans.requestType); err != nil {
+	if err := st.parser.feed(pkt.Ts, pkt.Payload, conn.trans.requestType, &conn.columnEncryption); err != nil {
 		logp.Info("** Error: %s", err)
 		debugf("%v, dropping TCP stream for error in direction %v.", err, dir)
-		tp.onDropConnection(conn) // todo: we can remove this if we aren't going to do anything with errors that are returned
-		return nil
+		conn.dropStreams()
+		// tp.onDropConnection(conn) // todo: we can remove this if we aren't going to do anything with errors that are returned
+		// return nil
 	}
+
 	return conn
 }
 
@@ -145,6 +151,7 @@ func (tp *mssqlPlugin) ReceivedFin(
 }
 
 // GapInStream handles lost packets in tcp-stream.
+// todo: We should clear the streams but retain the connection
 func (tp *mssqlPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 	nbytes int,
 	private protos.ProtocolData,
@@ -161,6 +168,7 @@ func (tp *mssqlPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 // onDropConnection processes and optionally sends incomplete
 // transaction in case of connection being dropped due to error
 func (tp *mssqlPlugin) onDropConnection(conn *connection) {
+	// We may want to send partialdata here
 
 }
 

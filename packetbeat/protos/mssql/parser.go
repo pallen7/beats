@@ -18,10 +18,31 @@ import (
 
 /*
 MVP todo list:
+
+Add support for all tokens received in responses
+Don't need to read all of the data but we do care about the COLUMNENCRYPTION (FEATUREEXTACK)
+
+1) bug:
+// When calling from SSMS we need to process CEKTable in the ColumnMeta
+// When called from Go test harness we don't have a CEKTable
+// Either because an older version of TDS is being used (not sure how we check this) or there is no CEK table.
+// Revisit and figure this out
+
+
 1) Token support:
-- envChangeToken 	- USE Development
-- infoToken 		- PRINT 'hello'
-- doneInProcToken	- EXEC return0 1
+** Error: Unsupported token: featureExtackToken 0xae
+** Error: Not Implemented: returnStatusToken 0x79
+** Error: Ignoring message
+-- Bug when processing RPC message during logon:
+** ProcName:
+	ۧँ퀄㐀ĆSELECT
+	dtb.collation_name AS [Collation],
+	dtb.name AS [DatabaseName2]
+	FROM
+	master.sys.databases AS dtb
+	WHERE
+	(dtb.name=@_msparam_0) 㓧ऀ퀄㐀4@_msparam_0 nvarchar(4000)䀋开洀猀瀀愀爀愀洀开　 䃧ट퀄㐀
+																						master
 
 2) Finish off adding support for all datatypes
 
@@ -118,7 +139,8 @@ func (p *parser) append(data []byte) error {
 	return nil
 }
 
-func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string) error {
+// Look at a better way to pass connection & transaction level data about
+func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string, columnEncryption *bool) error {
 
 	if len(data) < 8 {
 		// todo: not sure if empty buffer should be an error
@@ -148,7 +170,8 @@ func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string) 
 
 	// Not sure if this should be an error?
 	if ignoreMessage(p.header) {
-		return fmt.Errorf("Ignoring message")
+		//return fmt.Errorf("Ignoring message")
+		return nil
 	}
 
 	// Wait for more data if incomplete
@@ -164,7 +187,11 @@ func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string) 
 	// together as we need to capture 'core' information from various packets. Currently we will take the 'core' fields
 	// from the last packet as we only process on completion of a message so this feels wrong
 
-	if err := p.parse(); err != nil {
+	// Todo: dont' just pass down columnEncryption like this
+	if err := p.parse(columnEncryption); err != nil {
+
+		logp.Info("\n** Error: Complete buffer: % x\n", p.buf.BufferedBytes())
+
 		data := make([]byte, p.buf.Len())
 		p.buf.Read(data)
 		if len(data) > 500 {
@@ -200,7 +227,7 @@ func (p *parser) newMessage(ts time.Time) *message {
 	}
 }
 
-func (p *parser) parse() error {
+func (p *parser) parse(columnEncryption *bool) error {
 
 	switch p.header.messageType {
 	case sqlBatchMessage:
@@ -220,6 +247,8 @@ func (p *parser) parse() error {
 			return err
 		}
 
+		logp.Info("** sqlbatch: %s", p.message.sqlBatch)
+
 	case preTds7LoginMessage:
 		p.message.messageType = "Pre-TDS7 Login"
 		p.message.IsRequest = true
@@ -228,7 +257,42 @@ func (p *parser) parse() error {
 		// Can't recreate this from SSMS so will need to write a proggie to exercise RPC
 		p.message.messageType = "RPC"
 		p.message.IsRequest = true
-		return fmt.Errorf("Not Implemented: RPC message 0x%x", p.header.messageType)
+
+		// Skip over the header (header length - the 4 Bytes that we have just read)
+		headerLen, err := p.readUInt32(littleEndian)
+		if err != nil {
+			return err
+		}
+		p.buf.Advance(int(headerLen) - 4)
+
+		// Read the name of the proc
+		nameLen, err := p.readUInt16(littleEndian)
+		if err != nil {
+			return err
+		}
+		procName, err := p.readUCS2String(int(nameLen))
+		if err != nil {
+			return err
+		}
+		logp.Info("** ProcName: %s", procName)
+
+		// Print out the rest of the proc stream
+		data := make([]byte, p.buf.Len())
+		p.buf.Read(data)
+
+		/*
+			RPCRequest = ALL_HEADERS
+			RPCReqBatch
+			*((BatchFlag / NoExecFlag) RPCReqBatch)
+		*/
+
+		/*
+			ProcID = USHORT
+			ProcIDSwitch = %xFF %xFF
+			ProcName = US_VARCHAR (16bit unsigned int length)
+			NameLenProcID = ProcName
+		*/
+
 	case tabularResultMessage:
 
 		p.message.messageType = "Tabular result"
@@ -239,12 +303,14 @@ func (p *parser) parse() error {
 			There are tabular results that we want to dismiss:
 			Many request types produce tabular results. We don't care abour reading the data of a lot of them
 		*/
-		if !(p.originatingRequestType == "SQLBatch" || p.originatingRequestType == "RPC") || p.originatingRequestType == "" {
+		// if !(p.originatingRequestType == "SQLBatch" || p.originatingRequestType == "RPC" || p.originatingRequestType == "Login ") || p.originatingRequestType == "" {
+		// The below are specifically tokenless streams that I don't think we care about
+		if p.originatingRequestType == "Pre-Login" || p.originatingRequestType == "Attention Signal" {
 			p.buf.Advance(p.buf.Len())
 			break
 		}
 
-		if err := parseTokenStream(p); err != nil {
+		if err := parseTokenStream(p, columnEncryption); err != nil {
 			return err
 		}
 
@@ -267,6 +333,25 @@ func (p *parser) parse() error {
 	case tds7LoginMessage:
 		p.message.messageType = "TDS7 Login"
 		p.message.IsRequest = true
+
+		/*
+			LOGIN7 =
+				Length			= DWORD
+				TDSVersion		= DWORD
+				PacketSize		= DWORD
+				ClientProgVer	= DWORD
+				ClientPID		= DWORD
+				ConnectionID	= DWORD
+				OptionFlags1	= BYTE
+				OptionFlags2	= BYTE
+				TypeFlags (FRESERVEDBYTE / OptionFlags3) = BYTE
+				ClientTimeZone	= LONG
+				ClientLCID		= 4 BYTES
+				OffsetLength	= 26x USHORT + 6BYTE + DWORD
+				Data
+				[FeatureExt]
+		*/
+
 		p.buf.Advance(p.buf.Len())
 	case sspiMessage:
 		p.message.messageType = "SSPI"
@@ -285,7 +370,7 @@ func (p *parser) parse() error {
 	return nil
 }
 
-func parseTokenStream(p *parser) error {
+func parseTokenStream(p *parser, columnEncryption *bool) error {
 	// The below is effectively our parseTokenStream function:
 	for p.buf.Len() > 0 {
 		// We need to loop around the below and pull off each token as we go
@@ -300,8 +385,12 @@ func parseTokenStream(p *parser) error {
 			if err != nil {
 				return err
 			}
-			// todo: We need to support Encryption Keys (cektable) - for the moment just skip
-			p.buf.Advance(2)
+
+			// If the client supports column encryption then skip over the CEK table
+			// We are only supporting the fact that COLUMNENCRYPTION has been negotiated. Not the presence of any encryption keys
+			if *columnEncryption == true {
+				p.buf.Advance(2)
+			}
 
 			if p.message.colDataTypes, err = parseColumnMetadata(p, int(columnCount)); err != nil {
 				return err
@@ -335,10 +424,11 @@ func parseTokenStream(p *parser) error {
 
 			//p.buf.Advance(p.buf.Len())
 		case doneProcToken:
-			return fmt.Errorf("Not Implemented: doneProcToken 0x%x", tokenType)
+			p.buf.Advance(12)
 		case doneInProcToken:
-			return fmt.Errorf("Not Implemented: doneInProcToken 0x%x", tokenType)
+			p.buf.Advance(12)
 		case envChangeToken:
+			// todo: move these into an advance varlen 16
 			streamLen, err := p.readUInt16(littleEndian)
 			if err != nil {
 				return err
@@ -354,7 +444,39 @@ func parseTokenStream(p *parser) error {
 			if err := p.buf.Advance(int(streamLen)); err != nil {
 				return err
 			}
+		case featureExtackToken:
+
+			for {
+				f, err := p.buf.ReadByte()
+				if err != nil {
+					return err
+				}
+				if f == 0xff {
+					break
+				}
+				if f == 0x04 {
+					*columnEncryption = true
+				}
+				// Now just advance the buffer
+				ackDataLen, err := p.readUInt32(littleEndian)
+				if err != nil {
+					return err
+				}
+				if err := p.buf.Advance(int(ackDataLen)); err != nil {
+					return err
+				}
+			}
+
+			return fmt.Errorf("Unsupported token: featureExtackToken 0x%x", tokenType)
 		case infoToken:
+			streamLen, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
+			}
+		case loginAckToken:
 			streamLen, err := p.readUInt16(littleEndian)
 			if err != nil {
 				return err
@@ -399,7 +521,9 @@ func parseTokenStream(p *parser) error {
 					continue
 				}
 				nbc[nbcIdx] = nbc[nbcIdx] >> 1
-				advanceBufferForDataType(p, p.message.colDataTypes[i])
+				if err := advanceBufferForDataType(p, p.message.colDataTypes[i]); err != nil {
+					return err
+				}
 			}
 		case orderToken:
 			streamLen, err := p.readUInt16(littleEndian)
@@ -410,14 +534,34 @@ func parseTokenStream(p *parser) error {
 				return err
 			}
 		case returnStatusToken:
-			return fmt.Errorf("Not Implemented: returnStatusToken 0x%x", tokenType)
+			if err := p.buf.Advance(4); err != nil {
+				return err
+			}
 		case returnValueToken:
 			return fmt.Errorf("Not Implemented: returnValueToken 0x%x", tokenType)
 		case rowToken:
 			p.message.rowsReturned++
 
 			for i := 0; i < len(p.message.colDataTypes); i++ {
-				advanceBufferForDataType(p, p.message.colDataTypes[i])
+				if err := advanceBufferForDataType(p, p.message.colDataTypes[i]); err != nil {
+					return err
+				}
+			}
+		case sessionStateToken:
+			streamLen, err := p.readUInt32(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
+			}
+		case sspiToken:
+			streamLen, err := p.readUInt16(littleEndian)
+			if err != nil {
+				return err
+			}
+			if err := p.buf.Advance(int(streamLen)); err != nil {
+				return err
 			}
 		case tabNameToken:
 			return fmt.Errorf("Not Implemented: tabnameToken 0x%x", tokenType)
@@ -431,17 +575,8 @@ func parseTokenStream(p *parser) error {
 		// Token removed in TDS 7.2:
 		case offsetToken:
 			return fmt.Errorf("Unsupported token: offsetToken 0x%x", tokenType)
-		// Don't expect to receive these for SQL batch or RPC transactions:
-		case featureExtackToken:
-			return fmt.Errorf("Unsupported token: featureExtackToken 0x%x", tokenType)
 		case fedAuthInfoToken:
 			return fmt.Errorf("Unsupported token: fedAuthInfoToken 0x%x", tokenType)
-		case loginAckToken:
-			return fmt.Errorf("Unsupported token: loginAckToken 0x%x", tokenType)
-		case sessionStateToken:
-			return fmt.Errorf("Unsupported token: sessionStateToken 0x%x", tokenType)
-		case sspiToken:
-			return fmt.Errorf("Unsupported token: sspiToken 0x%x", tokenType)
 		default:
 			return fmt.Errorf("Unrecognised Token: 0x%x", tokenType)
 		}
@@ -534,6 +669,15 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 				return
 			}
 
+		case ssvarianttype:
+			// 4-byte info
+			if err = p.buf.Advance(4); err != nil {
+				return colType, err
+			}
+			if _, err = readColumnName(p); err != nil {
+				return
+			}
+
 		case bigvarchartype, nvarchartype:
 			// 5-byte collation (2.2.5.1.2), followed by 2-byte max length
 			if err = p.buf.Advance(7); err != nil {
@@ -618,8 +762,18 @@ func advanceBufferForDataType(p *parser, dataType byte) error {
 		if err := p.buf.Advance(int(charCount)); err != nil {
 			return err
 		}
+	case ssvarianttype:
+		charCount, err := p.readUInt32(littleEndian)
+		if err != nil {
+			return err
+		}
+		if err := p.buf.Advance(int(charCount)); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("Advance buffer. Unhandled data type 0x%x", dataType)
 	}
-	return fmt.Errorf("Advance buffer. Unhandled data type 0x%x", dataType)
+	return nil
 }
 
 func readColumnName(p *parser) (columnName string, err error) {
