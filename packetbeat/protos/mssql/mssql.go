@@ -18,16 +18,21 @@ type mssqlPlugin struct {
 	pub          transPub
 }
 
-// Application Layer tcp stream data to be stored on tcp connection context.
-type connection struct {
-	streams          [2]*stream
-	trans            mssqlTransaction
+type sqlConnection struct {
 	columnEncryption bool
 }
 
 // Uni-directional tcp stream state for parsing messages.
 type stream struct {
 	parser parser
+}
+
+// Application Layer tcp stream data to be stored on tcp connection context.
+// This works by virtue of the fact that we reset the parser every time we have finished parsing a message.
+type connection struct {
+	streams       [2]*stream
+	sqlConnection *sqlConnection
+	trans         transaction
 }
 
 var (
@@ -99,7 +104,7 @@ func (tp *mssqlPlugin) setFromConfig(config *tdsConfig) error {
 // Return <=0 to set default tcp module transaction timeout.
 func (tp *mssqlPlugin) ConnectionTimeout() time.Duration {
 	//return tp.transConfig.transactionTimeout
-	// todo: This should align with or exceed SQL Server timeout so that we can retain the ColumnEncryption info
+	// todo: This should (I think) align with or exceed SQL Server timeout so that we can retain the ColumnEncryption info
 	return time.Second * 30
 }
 
@@ -125,13 +130,16 @@ func (tp *mssqlPlugin) Parse(
 
 	if st == nil {
 		st = &stream{}
-		st.parser.init(&tp.parserConfig, func(msg *message) error {
-			return conn.trans.onMessage(tcptuple.IPPort(), dir, msg)
-		})
+		st.parser.init(
+			&tp.parserConfig,
+			func(msg *message) error {
+				return conn.trans.onMessage(tcptuple.IPPort(), dir, msg)
+			},
+		)
 		conn.streams[dir] = st
 	}
 
-	if err := st.parser.feed(pkt.Ts, pkt.Payload, conn.trans.requestType, &conn.columnEncryption); err != nil {
+	if err := st.parser.feed(pkt.Ts, pkt.Payload, conn.trans.requestType, conn.sqlConnection); err != nil {
 		logp.Info("** Error: %s", err)
 		debugf("%v, dropping TCP stream for error in direction %v.", err, dir)
 		conn.dropStreams()
@@ -175,7 +183,7 @@ func (tp *mssqlPlugin) onDropConnection(conn *connection) {
 func (tp *mssqlPlugin) ensureConnection(private protos.ProtocolData) *connection {
 	conn := getConnection(private)
 	if conn == nil {
-		conn = &connection{}
+		conn = &connection{sqlConnection: &sqlConnection{}}
 		conn.trans.init(&tp.transConfig, tp.pub.onTransaction)
 	}
 	return conn
@@ -184,6 +192,7 @@ func (tp *mssqlPlugin) ensureConnection(private protos.ProtocolData) *connection
 func (conn *connection) dropStreams() {
 	conn.streams[0] = nil
 	conn.streams[1] = nil
+	conn.trans.resetData()
 }
 
 func getConnection(private protos.ProtocolData) *connection {

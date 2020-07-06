@@ -17,7 +17,7 @@ type transPub struct {
 	results protos.Reporter
 }
 
-func (pub *transPub) onTransaction(tran *mssqlTransaction) error {
+func (pub *transPub) onTransaction(tran *transaction) error {
 	logp.Info("pub.onTransaction()")
 	if pub.results == nil {
 		return nil
@@ -31,20 +31,20 @@ type table struct {
 	rowcount int
 }
 
-func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
+func (pub *transPub) createEvent(tran *transaction) beat.Event {
 	logp.Info("pub.createEvent()")
 
 	// todo: if we have no request type we should not create an event - not sure where this should live
 
-	evt, _ := pb.NewBeatEvent(tran.appTransaction.Ts.Ts)
+	evt, _ := pb.NewBeatEvent(tran.Ts.Ts)
 
 	// Create our SQL specific fields here
-	tran.appTransaction.Event(&evt)
+	tran.Event(&evt)
 
 	fields := evt.Fields
 
 	mssqlrequest := common.MapStr{
-		"request_type": tran.requestType,
+		"request_type": getRequestTypeString(tran.requestType),
 	}
 
 	// Fairly arbitrary truncation:
@@ -68,7 +68,7 @@ func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 	}
 
 	// todo: Need a better way to coordinate this. Only log responses for request types that we process
-	if tran.requestType == "Bulk load data" || tran.requestType == "SQLBatch" || tran.requestType == "RPC" {
+	if tran.requestType == rpcMessage || tran.requestType == sqlBatchMessage {
 		mssql["response"] = mssqlresponse
 	}
 
@@ -138,6 +138,32 @@ func (pub *transPub) createEvent(tran *mssqlTransaction) beat.Event {
 	// logp.Info("** event: %v", evt)
 
 	return evt
+}
+
+func getRequestTypeString(messageType byte) string {
+	switch messageType {
+	case attentionSignalMessage:
+		return "Attention Signal"
+	case bulkLoadDataMessage:
+		return "Bulk load data"
+	case federatedAuthenticationTokenMesage:
+		return "Federated Authentication Token"
+	case preLoginMessage:
+		return "Pre-Login"
+	case preTds7LoginMessage:
+		return "Pre-TDS7 Login"
+	case rpcMessage:
+		return "RPC"
+	case sspiMessage:
+		return "SSPI"
+	case sqlBatchMessage:
+		return "SQL Batch"
+	case tds7LoginMessage:
+		return "TDS7 Login"
+	case transactionManagerRequestMessage:
+		return "Transaction Manager Request"
+	}
+	return "Unknown"
 }
 
 /*

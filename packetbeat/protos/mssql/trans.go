@@ -9,18 +9,21 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
-// A mssqlTransaction represents a full suite of packets that make up 1 request message & response message
-type mssqlTransaction struct {
-	config *transactionConfig
-
-	appTransaction applayer.Transaction
-
+type mssqlFields struct {
 	// SQL Specific fields
-	requestType  string
+	requestType  byte
 	rowsReturned int
 	resultSets   int
 	sqlBatch     string
 	procName     string
+}
+
+// A transaction represents a full suite of packets that make up 1 request message & response message
+type transaction struct {
+	config *transactionConfig
+
+	mssqlFields
+	applayer.Transaction
 
 	onTransaction transactionHandler
 }
@@ -29,15 +32,20 @@ type transactionConfig struct {
 	transactionTimeout time.Duration
 }
 
-type transactionHandler func(*mssqlTransaction) error
+type transactionHandler func(*transaction) error
 
-func (trans *mssqlTransaction) init(c *transactionConfig, cb transactionHandler) {
+func (trans *transaction) resetData() {
+	trans.Transaction = applayer.Transaction{}
+	trans.mssqlFields = mssqlFields{}
+}
+
+func (trans *transaction) init(c *transactionConfig, cb transactionHandler) {
 	logp.Info("trans.init()")
 	trans.config = c
 	trans.onTransaction = cb
 }
 
-func (trans *mssqlTransaction) onMessage(
+func (trans *transaction) onMessage(
 	tuple *common.IPPortTuple,
 	dir uint8,
 	msg *message,
@@ -61,6 +69,7 @@ func (trans *mssqlTransaction) onMessage(
 			debugf("Received response with tuple: %s", tuple)
 		}
 		err = trans.onResponse(tuple, dir, msg)
+		trans.resetData()
 	}
 
 	return err
@@ -68,7 +77,7 @@ func (trans *mssqlTransaction) onMessage(
 
 // onRequest handles request messages, merging with incomplete requests
 // and adding non-merged requests into the correlation list.
-func (trans *mssqlTransaction) onRequest(
+func (trans *transaction) onRequest(
 	tuple *common.IPPortTuple,
 	dir uint8,
 	msg *message,
@@ -79,7 +88,7 @@ func (trans *mssqlTransaction) onRequest(
 
 	// If request already exists then (log an error and?) replace the request
 
-	trans.appTransaction.InitWithMsg("mssql", &msg.Message)
+	trans.InitWithMsg("mssql", &msg.Message)
 	trans.requestType = msg.messageType
 	trans.sqlBatch = msg.sqlBatch
 	trans.procName = msg.procName
@@ -88,7 +97,7 @@ func (trans *mssqlTransaction) onRequest(
 
 // onRequest handles response messages, merging with incomplete requests
 // and adding non-merged responses into the correlation list.
-func (trans *mssqlTransaction) onResponse(
+func (trans *transaction) onResponse(
 	tuple *common.IPPortTuple,
 	dir uint8,
 	msg *message,

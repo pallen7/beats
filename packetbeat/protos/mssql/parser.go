@@ -13,51 +13,12 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
-// TDS 7.4 = SQL Server 2012+
-// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/135d0ebe-5c4c-4a94-99bf-1811eccb9f4a
-
-/*
-MVP todo list:
-
-Add support for all tokens received in responses
-Don't need to read all of the data but we do care about the COLUMNENCRYPTION (FEATUREEXTACK)
-
-2) Finish off adding support for all datatypes
-
-3) Output list of parameters for proc calls (see experimentation at bottom of pub.go)
-
-4) Add a readme:
-- Todo list
-- Messages with specific SQL fields:
--- SQL Batch (tokenless stream)
--- RPC (token stream)
--- Bulk Load (token stream) - support?
--- Both types return a Tabular Result (token stream)
-
-- Probably don't need it but add in header validation to ensure we don't get differing batch types
-- Add the ECS fields into pub.go/trans.go
-- Validate the header details match between separate packets
-- Add tests
-*/
-
 type messageHeader struct {
 	messageType byte
 	status      byte
 	// length	int (bytes 3&4)
 	// spid 	(bytes 5&6)
 	// packetId	(byte 7)
-}
-
-type parser struct {
-
-	// todo: We pass in and set this based on the connection trans in mssql.go. Find a better way to be aware of previous request type
-	originatingRequestType string
-
-	buf       streambuf.Buffer
-	config    *parserConfig
-	message   *message
-	onMessage func(m *message) error
-	header    *messageHeader
 }
 
 type parserConfig struct {
@@ -69,10 +30,7 @@ type message struct {
 	// Set these variables based on the first request that we get
 	applayer.Message
 
-	isComplete bool
-
-	// Wrap these up in different types once we start parsing more request types
-	messageType  string
+	messageType  byte // todo: remove this and move messageHeader into message
 	colDataTypes []byte
 	rowsReturned int
 	resultSets   int
@@ -80,7 +38,18 @@ type message struct {
 	procName     string
 }
 
+type parser struct {
+	sqlConn *sqlConnection
+
+	buf       streambuf.Buffer
+	config    *parserConfig
+	message   *message
+	onMessage func(m *message) error
+	header    *messageHeader // Move into message
+}
+
 // Error code if stream exceeds max allowed size on append.
+// Todo: Add in relevant error codes
 var (
 	ErrStreamTooLarge = errors.New("Stream data too large")
 )
@@ -109,8 +78,7 @@ func (p *parser) append(data []byte) error {
 	return nil
 }
 
-// Look at a better way to pass connection & transaction level data about
-func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string, columnEncryption *bool) error {
+func (p *parser) feed(ts time.Time, data []byte, requestType byte, connInfo *sqlConnection) error {
 
 	if len(data) < 8 {
 		// todo: not sure if empty buffer should be an error
@@ -118,7 +86,7 @@ func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string, 
 	}
 
 	// We need to parse the header at this point and only append the data
-	header, err := parseHeader(data)
+	header, err := readHeader(data)
 	if err != nil {
 		return err
 	}
@@ -149,16 +117,9 @@ func (p *parser) feed(ts time.Time, data []byte, originatingRequestType string, 
 		return nil
 	}
 
-	// todo: Find a more elgant way to do this instead of passing around the originating request type as a string
-	p.originatingRequestType = originatingRequestType
+	p.sqlConn = connInfo
 
-	// todo: Effectively we only call into this once for a complete message even if it is made up of various packets
-	// newMessage creates an appPlayer message containing all of our core fields. Do we need to care about merging messages
-	// together as we need to capture 'core' information from various packets. Currently we will take the 'core' fields
-	// from the last packet as we only process on completion of a message so this feels wrong
-
-	// Todo: dont' just pass down columnEncryption like this
-	if err := p.parse(columnEncryption); err != nil {
+	if err := p.parse(requestType); err != nil {
 
 		logp.Info("\n** Error: Complete buffer: % x\n", p.buf.BufferedBytes())
 
@@ -197,11 +158,11 @@ func (p *parser) newMessage(ts time.Time) *message {
 	}
 }
 
-func (p *parser) parse(columnEncryption *bool) error {
+func (p *parser) parse(requestType byte) error {
 
+	p.message.messageType = p.header.messageType
 	switch p.header.messageType {
 	case sqlBatchMessage:
-		p.message.messageType = "SQLBatch"
 		p.message.IsRequest = true
 
 		// Skip over the header (header length - the 4 Bytes that we have just read)
@@ -220,12 +181,10 @@ func (p *parser) parse(columnEncryption *bool) error {
 		logp.Info("** sqlbatch: %s", p.message.sqlBatch)
 
 	case preTds7LoginMessage:
-		p.message.messageType = "Pre-TDS7 Login"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case rpcMessage:
 		// Can't recreate this from SSMS so will need to write a proggie to exercise RPC
-		p.message.messageType = "RPC"
 		p.message.IsRequest = true
 
 		// Skip over the header (header length - the 4 Bytes that we have just read)
@@ -253,50 +212,36 @@ func (p *parser) parse(columnEncryption *bool) error {
 		p.buf.Advance(p.buf.Len())
 
 	case tabularResultMessage:
-
-		p.message.messageType = "Tabular result"
 		p.message.IsRequest = false
 
-		/*
-			todo: Find a better way to coordinate the request / response. Don't use the string on the transaction
-			There are tabular results that we want to dismiss:
-			Many request types produce tabular results. We don't care abour reading the data of a lot of them
-		*/
-		if p.originatingRequestType == "Pre-Login" || p.originatingRequestType == "Attention Signal" {
+		if requestType == preLoginMessage || requestType == attentionSignalMessage {
 			p.buf.Advance(p.buf.Len())
 			break
 		}
 
-		if err := parseTokenStream(p, columnEncryption); err != nil {
+		if err := parseTokenStream(p); err != nil {
 			return err
 		}
 
 	case attentionSignalMessage:
-		p.message.messageType = "Attention Signal"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case bulkLoadDataMessage:
-		p.message.messageType = "Bulk load data"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case federatedAuthenticationTokenMesage:
-		p.message.messageType = "Federated Authentication Token"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case transactionManagerRequestMessage:
-		p.message.messageType = "Transaction Manager Request"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case tds7LoginMessage:
-		p.message.messageType = "TDS7 Login"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case sspiMessage:
-		p.message.messageType = "SSPI"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	case preLoginMessage:
-		p.message.messageType = "Pre-Login"
 		p.message.IsRequest = true
 		p.buf.Advance(p.buf.Len())
 	default:
@@ -308,7 +253,7 @@ func (p *parser) parse(columnEncryption *bool) error {
 	return nil
 }
 
-func parseTokenStream(p *parser, columnEncryption *bool) error {
+func parseTokenStream(p *parser) error {
 	// The below is effectively our parseTokenStream function:
 	for p.buf.Len() > 0 {
 		// We need to loop around the below and pull off each token as we go
@@ -326,11 +271,11 @@ func parseTokenStream(p *parser, columnEncryption *bool) error {
 
 			// If the client supports column encryption then skip over the CEK table
 			// We are only supporting the fact that COLUMNENCRYPTION has been negotiated. Not the presence of any encryption keys
-			if *columnEncryption == true {
+			if p.sqlConn.columnEncryption == true {
 				p.buf.Advance(2)
 			}
 
-			if p.message.colDataTypes, err = parseColumnMetadata(p, int(columnCount)); err != nil {
+			if p.message.colDataTypes, err = readColumnMetadata(p, int(columnCount)); err != nil {
 				return err
 			}
 		case colInfoToken:
@@ -338,52 +283,27 @@ func parseTokenStream(p *parser, columnEncryption *bool) error {
 		case dataClassificationToken:
 			return fmt.Errorf("Not Implemented: dataClassificationToken 0x%x", tokenType)
 		case doneToken:
-			// todo: Revisit this - can we pull our row count for the current dataset from here?
-			/*
-				This token is used to indicate the completion of a SQL statement.
-				As multiple SQL statements can be sent to the server in a single SQL batch, multiple DONE tokens can
-				be generated. In this case, all but the final DONE token will have a Status value with DONE_MORE bit set (details follow).
-
-				Status = USHORT
-				CurCmd = USHORT
-				DoneRowCount = LONG / ULONGLONG;
-				(Changed to ULONGLONG in TDS 7.2)
-
-				DONE =	TokenType
-						Status
-						CurCmd
-						DoneRowCount
-			*/
-
-			// todo: we should really read the row count from here:
-			// For the moment just ignore the 12 bytes
-			p.buf.Advance(12)
-			p.message.resultSets++
-
-			//p.buf.Advance(p.buf.Len())
-		case doneProcToken:
-			p.buf.Advance(12)
-		case doneInProcToken:
-			p.buf.Advance(12)
-		case envChangeToken:
-			// todo: move these into an advance varlen 16
-			streamLen, err := p.readUInt16(littleEndian)
-			if err != nil {
+			if err := p.buf.Advance(12); err != nil {
 				return err
 			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			p.message.resultSets++
+		case doneProcToken:
+			if err := p.buf.Advance(12); err != nil {
+				return err
+			}
+		case doneInProcToken:
+			if err := p.buf.Advance(12); err != nil {
+				return err
+			}
+		case envChangeToken:
+			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
 		case errorToken:
-			streamLen, err := p.readUInt16(littleEndian)
-			if err != nil {
-				return err
-			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
 		case featureExtackToken:
-
 			for {
 				f, err := p.buf.ReadByte()
 				if err != nil {
@@ -393,80 +313,47 @@ func parseTokenStream(p *parser, columnEncryption *bool) error {
 					break
 				}
 				if f == 0x04 {
-					*columnEncryption = true
+					p.sqlConn.columnEncryption = true
 				}
 				// Now just advance the buffer
-				ackDataLen, err := p.readUInt32(littleEndian)
-				if err != nil {
-					return err
-				}
-				if err := p.buf.Advance(int(ackDataLen)); err != nil {
+				if err := p.advanceVarbyte32(); err != nil {
 					return err
 				}
 			}
 		case infoToken:
-			streamLen, err := p.readUInt16(littleEndian)
-			if err != nil {
-				return err
-			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
 		case loginAckToken:
-			streamLen, err := p.readUInt16(littleEndian)
-			if err != nil {
-				return err
-			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
 		case nbcRowToken:
-			/*
-				MS-TDS Spec - Page 106:
-				NBCROW, introduced in TDS 7.3.B, is used to send a row as defined by the COLMETADATA token to the client
-				with null bitmap compression. Null bitmap compression is implemented by using a single bit to specify
-				whether the column is null or not null and also by removing all null column values from the row.
-				Removing the null column values (which can be up to 8 bytes per null instance) from the row provides
-				the compression. The null bitmap contains one bit for each column defined in COLMETADATA.
-				In the null bitmap, a bit value of 1 means that the column is null and therefore not present in the row,
-				and a bit value of 0 means that the column is not null and is present in the row.
-				The null bitmap is always rounded up to the nearest multiple of 8 bits, so there might be 1 to 7 leftover
-				reserved bits at the end of the null bitmap in the last byte of the null bitmap. NBCROW is only used by
-				TDS result set streams from server to client. NBCROW MUST NOT be used in BulkLoadBCP streams.
-				NBCROW MUST NOT be used in TVP row streams.
-			*/
-
-			// Up the row count
+			// NBCROW (null bitmap compression) 2.2.7.15:
+			// Logic loosely based on: https://play.golang.org/p/copjZW4Pl8_r
 			p.message.rowsReturned++
 
-			nbcLength := len(p.message.colDataTypes) / 8
+			bitmapLen := len(p.message.colDataTypes) / 8
 			if len(p.message.colDataTypes)%8 != 0 {
-				nbcLength++
+				bitmapLen++
 			}
 
-			nbc := make([]byte, nbcLength)
-			if _, err := p.buf.Read(nbc); err != nil {
+			bitmaps := make([]byte, bitmapLen)
+			if _, err := p.buf.Read(bitmaps); err != nil {
 				return err
 			}
 
 			for i := 0; i < len(p.message.colDataTypes); i++ {
-				// Logic based on: https://play.golang.org/p/copjZW4Pl8_r
-				nbcIdx := i / 8
-				if nbc[nbcIdx]&1 == 1 {
-					nbc[nbcIdx] = nbc[nbcIdx] >> 1
-					continue
+				idx := i / 8
+				if bitmaps[idx]&1 != 1 {
+					if err := advanceRowValue(p, p.message.colDataTypes[i]); err != nil {
+						return err
+					}
 				}
-				nbc[nbcIdx] = nbc[nbcIdx] >> 1
-				if err := advanceBufferForDataType(p, p.message.colDataTypes[i]); err != nil {
-					return err
-				}
+				bitmaps[idx] = bitmaps[idx] >> 1
 			}
 		case orderToken:
-			streamLen, err := p.readUInt16(littleEndian)
-			if err != nil {
-				return err
-			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
 		case returnStatusToken:
@@ -479,24 +366,16 @@ func parseTokenStream(p *parser, columnEncryption *bool) error {
 			p.message.rowsReturned++
 
 			for i := 0; i < len(p.message.colDataTypes); i++ {
-				if err := advanceBufferForDataType(p, p.message.colDataTypes[i]); err != nil {
+				if err := advanceRowValue(p, p.message.colDataTypes[i]); err != nil {
 					return err
 				}
 			}
 		case sessionStateToken:
-			streamLen, err := p.readUInt32(littleEndian)
-			if err != nil {
-				return err
-			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			if err := p.advanceVarbyte32(); err != nil {
 				return err
 			}
 		case sspiToken:
-			streamLen, err := p.readUInt16(littleEndian)
-			if err != nil {
-				return err
-			}
-			if err := p.buf.Advance(int(streamLen)); err != nil {
+			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
 		case tabNameToken:
@@ -520,55 +399,8 @@ func parseTokenStream(p *parser, columnEncryption *bool) error {
 	return nil
 }
 
-func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error) {
-
-	/* 2.2.7.4 - COLMETADATA token
-	   Notes:
-
-		COLMETADATA =
-		- TokenType
-		- Count
-		- [CekTable] -->>
-			Set based on COLUMNENCRYPTION. Specified in the login7 stream and a FEATUREEXTACK message
-			As we only deal with messages at a packet level we won't have this information
-			For the moment we will have to fail inelegantly - need to test
-		- NoMetaData / (1*ColumnData) -->> todo: NoMetaData. Count will be 0xFFFF
-
-		ColumnData =
-		- UserType (4 bytes)
-		- Flags (2 bytes)
-		- TYPE_INFO
-		- [TableName]
-		- [CryptoMetaData]
-		- ColName
-
-	   - The TableName element is specified only if a text, ntext, or image column is included in the result set.
-
-	*/
-
-	/*
-		todo:
-		// variable length data types:
-		decimaltype         = 0x37
-		numerictype         = 0x3f
-		decimalntype        = 0x6a
-		numericntype        = 0x6c
-		datetime2ntype      = 0x2a
-		datetimeoffsetntype = 0x2b
-		chartype            = 0x2f
-		binarytype          = 0x2d
-		varbinarytype       = 0x25
-		bigvarbinarytype    = 0xa5
-		bigbinarytype       = 0xad
-		bigchartype         = 0xaf
-		xmltype             = 0xf1
-		udttype             = 0xf0
-		texttype            = 0x23
-		imagetype           = 0x22
-		ntexttype           = 0x63
-		ssvarianttype       = 0x62
-	*/
-
+func readColumnMetadata(p *parser, columnCount int) (colType []byte, err error) {
+	// 2.2.7.4 - COLMETADATA token
 	colType = make([]byte, columnCount)
 
 	for i := 0; i < columnCount; i++ {
@@ -585,24 +417,10 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 		// See: 2.2.5.6 Type Info Rule Definition
 		// Note (DATE MUST NOT have a TYPE_VARLEN. The value is either 3 bytes or 0 bytes (null).)
 		switch colType[i] {
-		case
-			bittype, int1type, int2type, int4type, int8type,
-			datetim4type, datetimetype, datentype,
-			money4type, moneytype,
-			flt4type, flt8type,
-			nulltype:
-
-			if _, err = readColumnName(p); err != nil {
-				return
-			}
-
 		case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, timentype:
 			// 1-byte length
 			if err = p.buf.Advance(1); err != nil {
 				return colType, err
-			}
-			if _, err = readColumnName(p); err != nil {
-				return
 			}
 
 		case ssvarianttype:
@@ -610,34 +428,26 @@ func parseColumnMetadata(p *parser, columnCount int) (colType []byte, err error)
 			if err = p.buf.Advance(4); err != nil {
 				return colType, err
 			}
-			if _, err = readColumnName(p); err != nil {
-				return
-			}
 
 		case bigvarchartype, nvarchartype:
 			// 5-byte collation (2.2.5.1.2), followed by 2-byte max length
 			if err = p.buf.Advance(7); err != nil {
 				return colType, err
 			}
-			if _, err = readColumnName(p); err != nil {
-				return
-			}
 
-		default:
-			return colType, fmt.Errorf("Parse Metadata. Unhandled data type: x%x", colType[i])
+		case decimaltype, numerictype, decimalntype, numericntype, datetime2ntype,
+			datetimeoffsetntype, chartype, binarytype, varbinarytype, bigvarbinarytype,
+			bigbinarytype, bigchartype, xmltype, udttype, texttype, imagetype, ntexttype:
+
+			return colType, fmt.Errorf("Parse Metadata. Not implemented data type: x%x", colType[i])
+		}
+
+		if _, err = readColumnName(p); err != nil {
+			return
 		}
 	}
 
 	return colType, nil
-}
-
-func parseHeader(data []byte) (header *messageHeader, err error) {
-	logp.Info("** Parsing header: % x", data[:8])
-	header = &messageHeader{
-		messageType: data[0],
-		status:      data[1],
-	}
-	return
 }
 
 func ignoreMessage(header *messageHeader) bool {
@@ -648,7 +458,16 @@ func isComplete(header *messageHeader) bool {
 	return header.status&eomStatus == eomStatus
 }
 
-func advanceBufferForDataType(p *parser, dataType byte) error {
+func readHeader(data []byte) (header *messageHeader, err error) {
+	logp.Info("** Parsing header: % x", data[:8])
+	header = &messageHeader{
+		messageType: data[0],
+		status:      data[1],
+	}
+	return
+}
+
+func advanceRowValue(p *parser, dataType byte) error {
 	switch dataType {
 	/*
 		todo:
@@ -726,6 +545,22 @@ const (
 	bigEndian    = 1
 )
 
+func (p *parser) advanceVarbyte16() (err error) {
+	len, err := p.readUInt16(littleEndian)
+	if err != nil {
+		return err
+	}
+	return p.buf.Advance(int(len))
+}
+
+func (p *parser) advanceVarbyte32() (err error) {
+	len, err := p.readUInt32(littleEndian)
+	if err != nil {
+		return err
+	}
+	return p.buf.Advance(int(len))
+}
+
 func (p *parser) readUInt16(endianness int) (v uint16, err error) {
 	b := make([]byte, 2)
 	if _, err = p.buf.Read(b); err != nil {
@@ -767,52 +602,3 @@ func (p *parser) readUCS2String(length int) (s string, err error) {
 	s = string(utf16.Decode(uChars))
 	return
 }
-
-// Carped straight from utf-16
-// We were getting unprintables without hitting the surrogate (or invalid surrogate range)
-// const (
-// 	// 0xd800-0xdc00 encodes the high 10 bits of a pair.
-// 	// 0xdc00-0xe000 encodes the low 10 bits of a pair.
-// 	// the value is those 20 bits plus 0x10000.
-// 	surr1 = 0xd800
-// 	surr2 = 0xdc00
-// 	surr3 = 0xe000
-
-// 	surrSelf = 0x10000
-// )
-
-// func decode(s []uint16) []rune {
-// 	a := make([]rune, len(s))
-// 	n := 0
-// 	for i := 0; i < len(s); i++ {
-// 		switch r := s[i]; {
-// 		case r < surr1, surr3 <= r:
-// 			// normal rune
-// 			a[n] = rune(r)
-// 		case surr1 <= r && r < surr2 && i+1 < len(s) &&
-// 			surr2 <= s[i+1] && s[i+1] < surr3:
-// 			logp.Info("\n\n ** VALID SURROGATE **\n\n")
-// 			// valid surrogate sequence
-// 			a[n] = decodeRune(rune(r), rune(s[i+1]))
-// 			i++
-// 		default:
-// 			// invalid surrogate sequence
-// 			logp.Info("\n\n ** INVALID SURROGATE **\n\n")
-// 			a[n] = replacementChar
-// 		}
-// 		n++
-// 	}
-// 	return a[:n]
-// }
-
-// func decodeRune(r1, r2 rune) rune {
-// 	if surr1 <= r1 && r1 < surr2 && surr2 <= r2 && r2 < surr3 {
-// 		return (r1-surr1)<<10 | (r2 - surr2) + surrSelf
-// 	}
-// 	return replacementChar
-// }
-
-// const (
-// 	replacementChar = '\uFFFD'     // Unicode replacement character
-// 	maxRune         = '\U0010FFFF' // Maximum valid Unicode code point.
-// )
