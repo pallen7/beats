@@ -11,9 +11,11 @@ import (
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/application/info"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/configrequest"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/errors"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/operation"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/config"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/logger"
-	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/plugin/app/monitoring"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/monitoring"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/server"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/dir"
 	reporting "github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/reporter"
 	logreporter "github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/reporter/log"
@@ -21,9 +23,10 @@ import (
 
 type emitterFunc func(*config.Config) error
 
-// ConfigHandler is capable of handling config and perform actions at it.
+// ConfigHandler is capable of handling config, perform actions at it, shutdown any long running process.
 type ConfigHandler interface {
 	HandleConfig(configrequest.Request) error
+	Shutdown()
 }
 
 type discoverFunc func() ([]string, error)
@@ -37,8 +40,10 @@ type Local struct {
 	bgContext   context.Context
 	cancelCtxFn context.CancelFunc
 	log         *logger.Logger
+	router      *router
 	source      source
 	agentInfo   *info.AgentInfo
+	srv         *server.Server
 }
 
 type source interface {
@@ -55,7 +60,7 @@ func newLocal(
 ) (*Local, error) {
 	var err error
 	if log == nil {
-		log, err = logger.New()
+		log, err = logger.NewFromConfig("", rawConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -78,6 +83,10 @@ func newLocal(
 	}
 
 	localApplication.bgContext, localApplication.cancelCtxFn = context.WithCancel(ctx)
+	localApplication.srv, err = server.NewFromConfig(log, rawConfig, &operation.ApplicationStatusHandler{})
+	if err != nil {
+		return nil, errors.New(err, "initialize GRPC listener")
+	}
 
 	reporter := reporting.NewReporter(localApplication.bgContext, log, localApplication.agentInfo, logR)
 
@@ -86,10 +95,11 @@ func newLocal(
 		return nil, errors.New(err, "failed to initialize monitoring")
 	}
 
-	router, err := newRouter(log, streamFactory(localApplication.bgContext, rawConfig, nil, reporter, monitor))
+	router, err := newRouter(log, streamFactory(localApplication.bgContext, rawConfig, localApplication.srv, reporter, monitor))
 	if err != nil {
 		return nil, errors.New(err, "fail to initialize pipeline router")
 	}
+	localApplication.router = router
 
 	discover := discoverer(pathConfigFile, c.Management.Path)
 	emit := emitter(log, router, &configModifiers{Decorators: []decoratorFunc{injectMonitoring}, Filters: []filterFunc{filters.ConstraintFilter}}, monitor)
@@ -113,6 +123,9 @@ func (l *Local) Start() error {
 	l.log.Info("Agent is starting")
 	defer l.log.Info("Agent is stopped")
 
+	if err := l.srv.Start(); err != nil {
+		return err
+	}
 	if err := l.source.Start(); err != nil {
 		return err
 	}
@@ -122,8 +135,11 @@ func (l *Local) Start() error {
 
 // Stop stops a local agent.
 func (l *Local) Stop() error {
+	err := l.source.Stop()
 	l.cancelCtxFn()
-	return l.source.Stop()
+	l.router.Shutdown()
+	l.srv.Stop()
+	return err
 }
 
 // AgentInfo retrieves agent information.

@@ -38,10 +38,10 @@ var (
 
 // Based on https://github.com/elastic/elasticsearch/blob/master/x-pack/plugin/monitoring/src/main/java/org/elasticsearch/xpack/monitoring/collector/indices/IndexStatsMonitoringDoc.java#L127-L203
 type stats struct {
-	Indices map[string]index `json:"indices"`
+	Indices map[string]Index `json:"indices"`
 }
 
-type index struct {
+type Index struct {
 	UUID      string     `json:"uuid"`
 	Primaries indexStats `json:"primaries"`
 	Total     indexStats `json:"total"`
@@ -65,6 +65,7 @@ type indexStats struct {
 		IndexTimeInMillis    int `json:"index_time_in_millis"`
 		ThrottleTimeInMillis int `json:"throttle_time_in_millis"`
 	} `json:"indexing"`
+	Bulk   *bulkStats `json:"bulk,omitempty"`
 	Merges struct {
 		TotalSizeInBytes int `json:"total_size_in_bytes"`
 	} `json:"merges"`
@@ -120,6 +121,14 @@ type shardStats struct {
 	Relocating   int `json:"relocating"`
 }
 
+type bulkStats struct {
+	TotalOperations   int `json:"total_operations"`
+	TotalTimeInMillis int `json:"total_time_in_millis"`
+	TotalSizeInBytes  int `json:"total_size_in_bytes"`
+	AvgTimeInMillis   int `json:"avg_time_in_millis"`
+	AvgSizeInBytes    int `json:"avg_size_in_bytes"`
+}
+
 func eventsMappingXPack(r mb.ReporterV2, m *MetricSet, info elasticsearch.Info, content []byte) error {
 	clusterStateMetrics := []string{"metadata", "routing_table"}
 	clusterState, err := elasticsearch.GetClusterState(m.HTTP, m.HTTP.GetURI(), clusterStateMetrics)
@@ -164,7 +173,7 @@ func parseAPIResponse(content []byte, indicesStats *stats) error {
 
 // Fields added here are based on same fields being added by internal collection in
 // https://github.com/elastic/elasticsearch/blob/master/x-pack/plugin/monitoring/src/main/java/org/elasticsearch/xpack/monitoring/collector/indices/IndexStatsMonitoringDoc.java#L62-L124
-func addClusterStateFields(idx *index, clusterState common.MapStr) error {
+func addClusterStateFields(idx *Index, clusterState common.MapStr) error {
 	indexMetadata, err := getClusterStateMetricForIndex(clusterState, idx.Index, "metadata")
 	if err != nil {
 		return errors.Wrap(err, "failed to get index metadata from cluster state")

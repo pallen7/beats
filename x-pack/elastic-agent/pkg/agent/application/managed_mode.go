@@ -14,19 +14,17 @@ import (
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/application/filters"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/application/info"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/errors"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/operation"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/storage"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/config"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/logger"
-	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/plugin/app/monitoring"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/monitoring"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/core/server"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/fleetapi"
 	reporting "github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/reporter"
 	fleetreporter "github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/reporter/fleet"
 	logreporter "github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/reporter/log"
 )
-
-type managementCfg struct {
-	Management *config.Config `config:"management"`
-}
 
 type apiClient interface {
 	Send(
@@ -48,6 +46,8 @@ type Managed struct {
 	api         apiClient
 	agentInfo   *info.AgentInfo
 	gateway     *fleetGateway
+	router      *router
+	srv         *server.Server
 }
 
 func newManaged(
@@ -61,7 +61,7 @@ func newManaged(
 		return nil, err
 	}
 
-	path := fleetAgentConfigPath()
+	path := info.AgentConfigFile()
 
 	// TODO(ph): Define the encryption password.
 	store := storage.NewEncryptedDiskStore(path, []byte(""))
@@ -92,7 +92,7 @@ func newManaged(
 	}
 
 	// Extract only management related configuration.
-	managementCfg := &managementCfg{}
+	managementCfg := &Config{}
 	if err := rawConfig.Unpack(managementCfg); err != nil {
 		return nil, errors.New(err,
 			fmt.Sprintf("fail to unpack configuration from %s", path),
@@ -114,6 +114,16 @@ func newManaged(
 	}
 
 	managedApplication.bgContext, managedApplication.cancelCtxFn = context.WithCancel(ctx)
+	managedApplication.srv, err = server.NewFromConfig(log, rawConfig, &operation.ApplicationStatusHandler{})
+	if err != nil {
+		return nil, errors.New(err, "initialize GRPC listener", errors.TypeNetwork)
+	}
+	// must start before `Start` is called as Fleet will already try to start applications
+	// before `Start` is even called.
+	err = managedApplication.srv.Start()
+	if err != nil {
+		return nil, errors.New(err, "starting GRPC listener", errors.TypeNetwork)
+	}
 
 	logR := logreporter.NewReporter(log, cfg.Reporting.Log)
 	fleetR, err := fleetreporter.NewReporter(agentInfo, log, cfg.Reporting.Fleet)
@@ -127,17 +137,18 @@ func newManaged(
 		return nil, errors.New(err, "failed to initialize monitoring")
 	}
 
-	router, err := newRouter(log, streamFactory(managedApplication.bgContext, rawConfig, client, combinedReporter, monitor))
+	router, err := newRouter(log, streamFactory(managedApplication.bgContext, rawConfig, managedApplication.srv, combinedReporter, monitor))
 	if err != nil {
 		return nil, errors.New(err, "fail to initialize pipeline router")
 	}
+	managedApplication.router = router
 
 	emit := emitter(
 		log,
 		router,
 		&configModifiers{
 			Decorators: []decoratorFunc{injectMonitoring},
-			Filters:    []filterFunc{filters.ConstraintFilter},
+			Filters:    []filterFunc{injectFleet(config), filters.ConstraintFilter},
 		},
 		monitor,
 	)
@@ -149,9 +160,9 @@ func newManaged(
 	batchedAcker := newLazyAcker(acker)
 
 	// Create the action store that will persist the last good policy change on disk.
-	actionStore, err := newActionStore(log, storage.NewDiskStore(fleetActionStoreFile()))
+	actionStore, err := newActionStore(log, storage.NewDiskStore(info.AgentActionStoreFile()))
 	if err != nil {
-		return nil, errors.New(err, fmt.Sprintf("fail to read action store '%s'", fleetActionStoreFile()))
+		return nil, errors.New(err, fmt.Sprintf("fail to read action store '%s'", info.AgentActionStoreFile()))
 	}
 	actionAcker := newActionStoreAcker(batchedAcker, actionStore)
 
@@ -212,7 +223,8 @@ func (m *Managed) Start() error {
 func (m *Managed) Stop() error {
 	defer m.log.Info("Agent is stopped")
 	m.cancelCtxFn()
-	m.gateway.Stop()
+	m.router.Shutdown()
+	m.srv.Stop()
 	return nil
 }
 

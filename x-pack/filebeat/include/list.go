@@ -8,9 +8,11 @@ package include
 
 import (
 	// Import packages that need to register themselves.
+	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/awscloudwatch"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/azureeventhub"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/cloudfoundry"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/googlepubsub"
+	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/http_endpoint"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/httpjson"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/netflow"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/o365audit"
@@ -24,6 +26,7 @@ import (
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/coredns"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/crowdstrike"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/envoyproxy"
+	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/fortinet"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/googlecloud"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/ibmmq"
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/module/iptables"

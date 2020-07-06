@@ -41,6 +41,7 @@ import (
 	"github.com/elastic/beats/v7/libbeat/management"
 	"github.com/elastic/beats/v7/libbeat/monitoring"
 	"github.com/elastic/beats/v7/libbeat/outputs/elasticsearch"
+	"github.com/elastic/beats/v7/libbeat/publisher/pipetool"
 
 	_ "github.com/elastic/beats/v7/filebeat/include"
 
@@ -66,6 +67,7 @@ type Filebeat struct {
 	config         *cfg.Config
 	moduleRegistry *fileset.ModuleRegistry
 	done           chan struct{}
+	pipeline       beat.PipelineConnector
 }
 
 // New creates a new Filebeat pointer instance.
@@ -112,7 +114,7 @@ func New(b *beat.Beat, rawConfig *common.Config) (beat.Beater, error) {
 		haveEnabledInputs = true
 	}
 
-	if !config.ConfigInput.Enabled() && !config.ConfigModules.Enabled() && !haveEnabledInputs && config.Autodiscover == nil && !b.ConfigManager.Enabled() {
+	if !config.ConfigInput.Enabled() && !config.ConfigModules.Enabled() && !haveEnabledInputs && config.Autodiscover == nil && !b.Manager.Enabled() {
 		if !b.InSetupCmd {
 			return nil, errors.New("no modules or inputs enabled and configuration reloading disabled. What files do you want me to watch?")
 		}
@@ -162,7 +164,7 @@ func (fb *Filebeat) setupPipelineLoaderCallback(b *beat.Beat) error {
 		pipelineLoaderFactory := newPipelineLoaderFactory(b.Config.Output.Config())
 		modulesFactory := fileset.NewSetupFactory(b.Info, pipelineLoaderFactory)
 		if fb.config.ConfigModules.Enabled() {
-			modulesLoader := cfgfile.NewReloader(b.Publisher, fb.config.ConfigModules)
+			modulesLoader := cfgfile.NewReloader(fb.pipeline, fb.config.ConfigModules)
 			modulesLoader.Load(modulesFactory)
 		}
 
@@ -227,16 +229,23 @@ func (fb *Filebeat) Run(b *beat.Beat) error {
 	// Make sure all events that were published in
 	registrarChannel := newRegistrarLogger(registrar)
 
-	err = b.Publisher.SetACKHandler(beat.PipelineACKHandler{
-		ACKEvents: newEventACKer(finishedLogger, registrarChannel).ackEvents,
-	})
-	if err != nil {
-		logp.Err("Failed to install the registry with the publisher pipeline: %v", err)
-		return err
-	}
+	// setup event counting for startup and a global common ACKer, such that all events will be
+	// routed to the reigstrar after they've been ACKed.
+	// Events with Private==nil or the type of private != file.State are directly
+	// forwarded to `finishedLogger`. Events from the `logs` input will first be forwarded
+	// to the registrar via `registrarChannel`, which finally forwards the events to finishedLogger as well.
+	// The finishedLogger decrements the counters in wgEvents after all events have been securely processed
+	// by the registry.
+	fb.pipeline = withPipelineEventCounter(b.Publisher, wgEvents)
+	fb.pipeline = pipetool.WithACKer(fb.pipeline, eventACKer(finishedLogger, registrarChannel))
+
+	// Filebeat by default required infinite retry. Let's configure this for all
+	// inputs by default.  Inputs (and InputController) can overwrite the sending
+	// guarantees explicitly when connecting with the pipeline.
+	fb.pipeline = pipetool.WithDefaultGuarantees(fb.pipeline, beat.GuaranteedSend)
 
 	outDone := make(chan struct{}) // outDone closes down all active pipeline connections
-	pipelineConnector := channel.NewOutletFactory(outDone, wgEvents, b.Info).Create
+	pipelineConnector := channel.NewOutletFactory(outDone).Create
 
 	// Create a ES connection factory for dynamic modules pipeline loading
 	var pipelineLoaderFactory fileset.PipelineLoaderFactory
@@ -246,7 +255,8 @@ func (fb *Filebeat) Run(b *beat.Beat) error {
 		logp.Warn(pipelinesWarning)
 	}
 
-	inputLoader := input.NewRunnerFactory(pipelineConnector, registrar, fb.done)
+	inputLoader := channel.RunnerFactoryWithCommonInputSettings(b.Info,
+		input.NewRunnerFactory(pipelineConnector, registrar, fb.done))
 	moduleLoader := fileset.NewFactory(inputLoader, b.Info, pipelineLoaderFactory, config.OverwritePipelines)
 
 	crawler, err := newCrawler(inputLoader, moduleLoader, config.Inputs, fb.done, *once)
@@ -283,7 +293,7 @@ func (fb *Filebeat) Run(b *beat.Beat) error {
 		logp.Debug("modules", "Existing Ingest pipelines will be updated")
 	}
 
-	err = crawler.Start(b.Publisher, config.ConfigInput, config.ConfigModules)
+	err = crawler.Start(fb.pipeline, config.ConfigInput, config.ConfigModules)
 	if err != nil {
 		crawler.Stop()
 		return fmt.Errorf("Failed to start crawler: %+v", err)
@@ -300,23 +310,24 @@ func (fb *Filebeat) Run(b *beat.Beat) error {
 	}
 
 	// Register reloadable list of inputs and modules
-	inputs := cfgfile.NewRunnerList(management.DebugK, inputLoader, b.Publisher)
+	inputs := cfgfile.NewRunnerList(management.DebugK, inputLoader, fb.pipeline)
 	reload.Register.MustRegisterList("filebeat.inputs", inputs)
 
-	modules := cfgfile.NewRunnerList(management.DebugK, moduleLoader, b.Publisher)
+	modules := cfgfile.NewRunnerList(management.DebugK, moduleLoader, fb.pipeline)
 	reload.Register.MustRegisterList("filebeat.modules", modules)
 
 	var adiscover *autodiscover.Autodiscover
 	if fb.config.Autodiscover != nil {
 		adiscover, err = autodiscover.NewAutodiscover(
 			"filebeat",
-			b.Publisher,
+			fb.pipeline,
 			cfgfile.MultiplexedRunnerFactory(
 				cfgfile.MatchHasField("module", moduleLoader),
 				cfgfile.MatchDefault(inputLoader),
 			),
 			autodiscover.QueryConfig(),
 			config.Autodiscover,
+			b.Keystore,
 		)
 		if err != nil {
 			return err

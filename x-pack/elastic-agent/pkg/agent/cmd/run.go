@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/application"
+	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/application/paths"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/agent/errors"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/cli"
 	"github.com/elastic/beats/v7/x-pack/elastic-agent/pkg/config"
@@ -33,20 +34,27 @@ func newRunCommandWithArgs(flags *globalFlags, _ []string, streams *cli.IOStream
 }
 
 func run(flags *globalFlags, streams *cli.IOStreams) error {
-	config, err := config.LoadYAML(flags.PathConfigFile)
+	pathConfigFile := flags.Config()
+	config, err := config.LoadYAML(pathConfigFile)
 	if err != nil {
 		return errors.New(err,
-			fmt.Sprintf("could not read configuration file %s", flags.PathConfigFile),
+			fmt.Sprintf("could not read configuration file %s", pathConfigFile),
 			errors.TypeFilesystem,
-			errors.M(errors.MetaKeyPath, flags.PathConfigFile))
+			errors.M(errors.MetaKeyPath, pathConfigFile))
 	}
 
-	logger, err := logger.NewFromConfig(config)
+	logger, err := logger.NewFromConfig("", config)
 	if err != nil {
 		return err
 	}
 
-	app, err := application.New(logger, flags.PathConfigFile)
+	locker := application.NewAppLocker(paths.Data())
+	if err := locker.TryLock(); err != nil {
+		return err
+	}
+	defer locker.Unlock()
+
+	app, err := application.New(logger, pathConfigFile)
 	if err != nil {
 		return err
 	}

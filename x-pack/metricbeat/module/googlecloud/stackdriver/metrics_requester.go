@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,7 +46,7 @@ func (r *stackdriverMetricsRequester) Metric(ctx context.Context, metricType str
 		Filter:   r.getFilterForMetric(metricType),
 		Aggregation: &monitoringpb.Aggregation{
 			PerSeriesAligner: googlecloud.AlignersMapToGCP[aligner],
-			AlignmentPeriod:  &r.config.period,
+			AlignmentPeriod:  r.config.period,
 		},
 	}
 
@@ -69,41 +70,26 @@ func (r *stackdriverMetricsRequester) Metric(ctx context.Context, metricType str
 	return
 }
 
-func constructFilter(m string, region string, zone string) string {
-	filter := fmt.Sprintf(`metric.type="%s" AND resource.labels.zone = `, m)
-	// If region is specified, use region as filter resource label.
-	// If region is empty but zone is given, use zone instead.
-	if region != "" {
-		filter += fmt.Sprintf(`starts_with("%s")`, region)
-	} else if zone != "" {
-		filter += fmt.Sprintf(`"%s"`, zone)
-	}
-	return filter
-}
-
-func (r *stackdriverMetricsRequester) Metrics(ctx context.Context, stackDriverConfigs []stackDriverConfig, metricsMeta map[string]metricMeta) ([]timeSeriesWithAligner, error) {
+func (r *stackdriverMetricsRequester) Metrics(ctx context.Context, sdc stackDriverConfig, metricsMeta map[string]metricMeta) ([]timeSeriesWithAligner, error) {
 	var lock sync.Mutex
 	var wg sync.WaitGroup
 	results := make([]timeSeriesWithAligner, 0)
 
-	for _, sdc := range stackDriverConfigs {
-		aligner := sdc.Aligner
-		for _, mt := range sdc.MetricTypes {
-			metricType := mt
-			wg.Add(1)
+	aligner := sdc.Aligner
+	for mt, meta := range metricsMeta {
+		wg.Add(1)
 
-			go func(metricType string) {
-				defer wg.Done()
+		metricMeta := meta
+		go func(mt string) {
+			defer wg.Done()
 
-				metricMeta := metricsMeta[metricType]
-				interval, aligner := getTimeIntervalAligner(metricMeta.ingestDelay, metricMeta.samplePeriod, r.config.period, aligner)
-				ts := r.Metric(ctx, metricType, interval, aligner)
-
-				lock.Lock()
-				defer lock.Unlock()
-				results = append(results, ts)
-			}(metricType)
-		}
+			r.logger.Debugf("For metricType %s, metricMeta = %s", mt, metricMeta)
+			interval, aligner := getTimeIntervalAligner(metricMeta.ingestDelay, metricMeta.samplePeriod, r.config.period, aligner)
+			ts := r.Metric(ctx, mt, interval, aligner)
+			lock.Lock()
+			defer lock.Unlock()
+			results = append(results, ts)
+		}(mt)
 	}
 
 	wg.Wait()
@@ -116,6 +102,9 @@ var serviceRegexp = regexp.MustCompile(`^(?P<service>[a-z]+)\.googleapis.com.*`)
 // if they have a region specified.
 func (r *stackdriverMetricsRequester) getFilterForMetric(m string) (f string) {
 	f = fmt.Sprintf(`metric.type="%s"`, m)
+	if r.config.Zone == "" && r.config.Region == "" {
+		return
+	}
 
 	service := serviceRegexp.ReplaceAllString(m, "${service}")
 
@@ -134,16 +123,25 @@ func (r *stackdriverMetricsRequester) getFilterForMetric(m string) (f string) {
 				"both are provided, only use region", r.config.Region, r.config.Zone)
 		}
 		if r.config.Region != "" {
-			f = fmt.Sprintf(`%s AND resource.labels.zone = starts_with("%s")`, f, r.config.Region)
+			region := r.config.Region
+			if strings.HasSuffix(r.config.Region, "*") {
+				region = strings.TrimSuffix(r.config.Region, "*")
+			}
+			f = fmt.Sprintf(`%s AND resource.labels.zone = starts_with("%s")`, f, region)
 		} else if r.config.Zone != "" {
-			f = fmt.Sprintf(`%s AND resource.labels.zone = "%s"`, f, r.config.Zone)
+			zone := r.config.Zone
+			if strings.HasSuffix(r.config.Zone, "*") {
+				zone = strings.TrimSuffix(r.config.Zone, "*")
+			}
+			f = fmt.Sprintf(`%s AND resource.labels.zone = starts_with("%s")`, f, zone)
 		}
 	}
+	r.logger.Debugf("ListTimeSeries API filter = %s", f)
 	return
 }
 
 // Returns a GCP TimeInterval based on the ingestDelay and samplePeriod from ListMetricDescriptor
-func getTimeIntervalAligner(ingestDelay time.Duration, samplePeriod time.Duration, collectionPeriod duration.Duration, inputAligner string) (*monitoringpb.TimeInterval, string) {
+func getTimeIntervalAligner(ingestDelay time.Duration, samplePeriod time.Duration, collectionPeriod *duration.Duration, inputAligner string) (*monitoringpb.TimeInterval, string) {
 	var startTime, endTime, currentTime time.Time
 	var needsAggregation bool
 	currentTime = time.Now().UTC()
@@ -161,7 +159,7 @@ func getTimeIntervalAligner(ingestDelay time.Duration, samplePeriod time.Duratio
 	// When samplePeriod > collectionPeriod, aggregation is not needed, use sample period
 	// to determine startTime and endTime to make sure there will be data point in this time range.
 	if int64(samplePeriod.Seconds()) >= collectionPeriod.Seconds {
-		endTime = time.Now().UTC().Add(-ingestDelay)
+		endTime = currentTime.Add(-ingestDelay)
 		startTime = endTime.Add(-samplePeriod)
 		needsAggregation = false
 	}

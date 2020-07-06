@@ -52,6 +52,7 @@ grouped in the following categories:
 * <<exported-fields-kubernetes-processor>>
 * <<exported-fields-kubernetes>>
 * <<exported-fields-kvm>>
+* <<exported-fields-linux>>
 * <<exported-fields-logstash>>
 * <<exported-fields-memcached>>
 * <<exported-fields-mongodb>>
@@ -83,7 +84,7 @@ grouped in the following categories:
 
 --
 [[exported-fields-activemq]]
-== activemq fields
+== ActiveMQ fields
 
 activemq module
 
@@ -1509,21 +1510,11 @@ type: long
 --
 
 [[exported-fields-aws]]
-== aws fields
+== AWS fields
 
 `aws` module collects AWS monitoring metrics from AWS Cloudwatch.
 
 
-
-*`cloud.account.name`*::
-+
---
-The cloud account name or alias used to identify different entities in a multi-tenant environment.
-
-
-type: keyword
-
---
 
 [float]
 === aws
@@ -1577,6 +1568,17 @@ type: object
 `billing` contains the estimated charges for your AWS account in Cloudwatch.
 
 
+
+
+*`aws.billing.metrics.EstimatedCharges.max`*::
++
+--
+Maximum estimated charges for AWS acccount.
+
+type: long
+
+--
+
 [float]
 === cloudwatch
 
@@ -1602,16 +1604,12 @@ type: keyword
 
 
 
-[float]
-=== SuccessfulRequestLatency
-
-The latency of successful requests to DynamoDB or Amazon DynamoDB Streams during the specified time period.
-
-
-
 *`aws.dynamodb.metrics.SuccessfulRequestLatency.avg`*::
 +
 --
+The average latency of successful requests to DynamoDB or Amazon DynamoDB Streams during the specified time period.
+
+
 type: double
 
 --
@@ -1619,6 +1617,9 @@ type: double
 *`aws.dynamodb.metrics.SuccessfulRequestLatency.max`*::
 +
 --
+The maximum latency of successful requests to DynamoDB or Amazon DynamoDB Streams during the specified time period.
+
+
 type: double
 
 --
@@ -1653,16 +1654,12 @@ type: double
 
 --
 
-[float]
-=== ConsumedReadCapacityUnits
-
-The number of read capacity units consumed over the specified time period, so you can track how much of your provisioned throughput is used.
-
-
-
 *`aws.dynamodb.metrics.ConsumedReadCapacityUnits.avg`*::
 +
 --
+The average number of read capacity units consumed over the specified time period, so you can track how much of your provisioned throughput is used.
+
+
 type: double
 
 --
@@ -1670,20 +1667,19 @@ type: double
 *`aws.dynamodb.metrics.ConsumedReadCapacityUnits.sum`*::
 +
 --
+The sum of read capacity units consumed over the specified time period, so you can track how much of your provisioned throughput is used.
+
+
 type: long
 
 --
 
-[float]
-=== ConsumedWriteCapacityUnits
-
-The number of write capacity units consumed over the specified time period, so you can track how much of your provisioned throughput is used.
-
-
-
 *`aws.dynamodb.metrics.ConsumedWriteCapacityUnits.avg`*::
 +
 --
+The average number of write capacity units consumed over the specified time period, so you can track how much of your provisioned throughput is used.
+
+
 type: double
 
 --
@@ -1691,20 +1687,19 @@ type: double
 *`aws.dynamodb.metrics.ConsumedWriteCapacityUnits.sum`*::
 +
 --
+The sum of write capacity units consumed over the specified time period, so you can track how much of your provisioned throughput is used.
+
+
 type: long
 
 --
 
-[float]
-=== ReplicationLatency
-
-The elapsed time between an updated item appearing in the DynamoDB stream for one replica table, and that item appearing in another replica in the global table.
-
-
-
 *`aws.dynamodb.metrics.ReplicationLatency.avg`*::
 +
 --
+The average elapsed time between an updated item appearing in the DynamoDB stream for one replica table, and that item appearing in another replica in the global table.
+
+
 type: double
 
 --
@@ -1712,20 +1707,19 @@ type: double
 *`aws.dynamodb.metrics.ReplicationLatency.max`*::
 +
 --
+The maximum elapsed time between an updated item appearing in the DynamoDB stream for one replica table, and that item appearing in another replica in the global table.
+
+
 type: double
 
 --
 
-[float]
-=== TransactionConflict
-
-Rejected item-level requests due to transactional conflicts between concurrent requests on the same items.
-
-
-
 *`aws.dynamodb.metrics.TransactionConflict.avg`*::
 +
 --
+Average rejected item-level requests due to transactional conflicts between concurrent requests on the same items.
+
+
 type: double
 
 --
@@ -1733,6 +1727,9 @@ type: double
 *`aws.dynamodb.metrics.TransactionConflict.sum`*::
 +
 --
+Total rejected item-level requests due to transactional conflicts between concurrent requests on the same items.
+
+
 type: long
 
 --
@@ -1882,6 +1879,107 @@ type: double
 
 `ebs` contains the metrics that were scraped from AWS CloudWatch which contains monitoring metrics sent by AWS EBS.
 
+
+
+
+*`aws.ebs.metrics.VolumeReadBytes.avg`*::
++
+--
+Average size of each read operation during the period, except on volumes attached to a Nitro-based instance, where the average represents the average over the specified period.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeWriteBytes.avg`*::
++
+--
+Average size of each write operation during the period, except on volumes attached to a Nitro-based instance, where the average represents the average over the specified period.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeReadOps.avg`*::
++
+--
+The total number of read operations in a specified period of time.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeWriteOps.avg`*::
++
+--
+The total number of write operations in a specified period of time.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeQueueLength.avg`*::
++
+--
+The number of read and write operation requests waiting to be completed in a specified period of time.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeThroughputPercentage.avg`*::
++
+--
+The percentage of I/O operations per second (IOPS) delivered of the total IOPS provisioned for an Amazon EBS volume. Used with Provisioned IOPS SSD volumes only.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeConsumedReadWriteOps.avg`*::
++
+--
+The total amount of read and write operations (normalized to 256K capacity units) consumed in a specified period of time. Used with Provisioned IOPS SSD volumes only.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.BurstBalance.avg`*::
++
+--
+Used with General Purpose SSD (gp2), Throughput Optimized HDD (st1), and Cold HDD (sc1) volumes only. Provides information about the percentage of I/O credits (for gp2) or throughput credits (for st1 and sc1) remaining in the burst bucket.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeTotalReadTime.sum`*::
++
+--
+The total number of seconds spent by all read operations that completed in a specified period of time.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeTotalWriteTime.sum`*::
++
+--
+The total number of seconds spent by all write operations that completed in a specified period of time.
+
+type: double
+
+--
+
+*`aws.ebs.metrics.VolumeIdleTime.sum`*::
++
+--
+The total number of seconds in a specified period of time when no read or write operations were submitted.
+
+type: double
+
+--
 
 [float]
 === ec2
@@ -2244,17 +2342,759 @@ type: integer
 `elb` contains the metrics that were scraped from AWS CloudWatch which contains monitoring metrics sent by AWS ELB.
 
 
+
+
+*`aws.elb.metrics.BackendConnectionErrors.sum`*::
++
+--
+The number of connections that were not successfully established between the load balancer and the registered instances.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HTTPCode_Backend_2XX.sum`*::
++
+--
+The number of HTTP 2XX response code generated by registered instances.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HTTPCode_Backend_3XX.sum`*::
++
+--
+The number of HTTP 3XX response code generated by registered instances.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HTTPCode_Backend_4XX.sum`*::
++
+--
+The number of HTTP 4XX response code generated by registered instances.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HTTPCode_Backend_5XX.sum`*::
++
+--
+The number of HTTP 5XX response code generated by registered instances.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HTTPCode_ELB_4XX.sum`*::
++
+--
+The number of HTTP 4XX client error codes generated by the load balancer.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HTTPCode_ELB_5XX.sum`*::
++
+--
+The number of HTTP 5XX server error codes generated by the load balancer.
+
+type: long
+
+--
+
+*`aws.elb.metrics.RequestCount.sum`*::
++
+--
+The number of requests completed or connections made during the specified interval.
+
+type: long
+
+--
+
+*`aws.elb.metrics.SpilloverCount.sum`*::
++
+--
+The total number of requests that were rejected because the surge queue is full.
+
+type: long
+
+--
+
+*`aws.elb.metrics.HealthyHostCount.max`*::
++
+--
+The number of healthy instances registered with your load balancer.
+
+type: long
+
+--
+
+*`aws.elb.metrics.SurgeQueueLength.max`*::
++
+--
+The total number of requests (HTTP listener) or connections (TCP listener) that are pending routing to a healthy instance.
+
+type: long
+
+--
+
+*`aws.elb.metrics.UnHealthyHostCount.max`*::
++
+--
+The number of unhealthy instances registered with your load balancer.
+
+type: long
+
+--
+
+*`aws.elb.metrics.Latency.avg`*::
++
+--
+The total time elapsed, in seconds, from the time the load balancer sent the request to a registered instance until the instance started to send the response headers.
+
+type: double
+
+--
+
+*`aws.elb.metrics.EstimatedALBActiveConnectionCount.avg`*::
++
+--
+The estimated number of concurrent TCP connections active from clients to the load balancer and from the load balancer to targets.
+
+type: double
+
+--
+
+*`aws.elb.metrics.EstimatedALBConsumedLCUs.avg`*::
++
+--
+The estimated number of load balancer capacity units (LCU) used by an Application Load Balancer.
+
+type: double
+
+--
+
+*`aws.elb.metrics.EstimatedALBNewConnectionCount.avg`*::
++
+--
+The estimated number of new TCP connections established from clients to the load balancer and from the load balancer to targets.
+
+type: double
+
+--
+
+*`aws.elb.metrics.EstimatedProcessedBytes.avg`*::
++
+--
+The estimated number of bytes processed by an Application Load Balancer.
+
+type: double
+
+--
+
+[float]
+=== applicationelb
+
+`applicationelb` contains the metrics that were scraped from AWS CloudWatch which contains monitoring metrics sent by AWS ApplicationELB.
+
+
+
+
+*`aws.applicationelb.metrics.ActiveConnectionCount.sum`*::
++
+--
+The total number of concurrent TCP connections active from clients to the load balancer and from the load balancer to targets.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.ClientTLSNegotiationErrorCount.sum`*::
++
+--
+The number of TLS connections initiated by the client that did not establish a session with the load balancer due to a TLS error.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTP_Fixed_Response_Count.sum`*::
++
+--
+The number of fixed-response actions that were successful.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTP_Redirect_Count.sum`*::
++
+--
+The number of redirect actions that were successful.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTP_Redirect_Url_Limit_Exceeded_Count.sum`*::
++
+--
+The number of redirect actions that couldn't be completed because the URL in the response location header is larger than 8K.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_3XX_Count.sum`*::
++
+--
+The number of HTTP 3XX redirection codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_4XX_Count.sum`*::
++
+--
+The number of HTTP 4XX client error codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_5XX_Count.sum`*::
++
+--
+The number of HTTP 5XX server error codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_500_Count.sum`*::
++
+--
+The number of HTTP 500 error codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_502_Count.sum`*::
++
+--
+The number of HTTP 502 error codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_503_Count.sum`*::
++
+--
+The number of HTTP 503 error codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.HTTPCode_ELB_504_Count.sum`*::
++
+--
+The number of HTTP 504 error codes that originate from the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.IPv6ProcessedBytes.sum`*::
++
+--
+The total number of bytes processed by the load balancer over IPv6.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.IPv6RequestCount.sum`*::
++
+--
+The number of IPv6 requests received by the load balancer.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.NewConnectionCount.sum`*::
++
+--
+The total number of new TCP connections established from clients to the load balancer and from the load balancer to targets.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.ProcessedBytes.sum`*::
++
+--
+The total number of bytes processed by the load balancer over IPv4 and IPv6.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.RejectedConnectionCount.sum`*::
++
+--
+The number of connections that were rejected because the load balancer had reached its maximum number of connections.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.RequestCount.sum`*::
++
+--
+The number of requests processed over IPv4 and IPv6.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.RuleEvaluations.sum`*::
++
+--
+The number of rules processed by the load balancer given a request rate averaged over an hour.
+
+type: long
+
+--
+
+*`aws.applicationelb.metrics.ConsumedLCUs.avg`*::
++
+--
+The number of load balancer capacity units (LCU) used by your load balancer.
+
+type: double
+
+--
+
+[float]
+=== networkelb
+
+`networkelb` contains the metrics that were scraped from AWS CloudWatch which contains monitoring metrics sent by AWS NetworkELB.
+
+
+
+
+*`aws.networkelb.metrics.ActiveFlowCount.avg`*::
++
+--
+The total number of concurrent flows (or connections) from clients to targets.
+
+type: double
+
+--
+
+*`aws.networkelb.metrics.ActiveFlowCount_TCP.avg`*::
++
+--
+The total number of concurrent TCP flows (or connections) from clients to targets.
+
+type: double
+
+--
+
+*`aws.networkelb.metrics.ActiveFlowCount_TLS.avg`*::
++
+--
+The total number of concurrent TLS flows (or connections) from clients to targets.
+
+type: double
+
+--
+
+*`aws.networkelb.metrics.ActiveFlowCount_UDP.avg`*::
++
+--
+The total number of concurrent UDP flows (or connections) from clients to targets.
+
+type: double
+
+--
+
+*`aws.networkelb.metrics.ConsumedLCUs.avg`*::
++
+--
+The number of load balancer capacity units (LCU) used by your load balancer.
+
+type: double
+
+--
+
+*`aws.networkelb.metrics.ClientTLSNegotiationErrorCount.sum`*::
++
+--
+The total number of TLS handshakes that failed during negotiation between a client and a TLS listener.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.NewFlowCount.sum`*::
++
+--
+The total number of new flows (or connections) established from clients to targets in the time period.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.NewFlowCount_TLS.sum`*::
++
+--
+The total number of new TLS flows (or connections) established from clients to targets in the time period.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.ProcessedBytes.sum`*::
++
+--
+The total number of bytes processed by the load balancer, including TCP/IP headers.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.ProcessedBytes_TLS.sum`*::
++
+--
+The total number of bytes processed by TLS listeners.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.TargetTLSNegotiationErrorCount.sum`*::
++
+--
+The total number of TLS handshakes that failed during negotiation between a TLS listener and a target.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.TCP_Client_Reset_Count.sum`*::
++
+--
+The total number of reset (RST) packets sent from a client to a target.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.TCP_ELB_Reset_Count.sum`*::
++
+--
+The total number of reset (RST) packets generated by the load balancer.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.TCP_Target_Reset_Count.sum`*::
++
+--
+The total number of reset (RST) packets sent from a target to a client.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.HealthyHostCount.max`*::
++
+--
+The number of targets that are considered healthy.
+
+type: long
+
+--
+
+*`aws.networkelb.metrics.UnHealthyHostCount.max`*::
++
+--
+The number of targets that are considered unhealthy.
+
+type: long
+
+--
+
 [float]
 === lambda
 
 `lambda` contains the metrics that were scraped from AWS CloudWatch which contains monitoring metrics sent by AWS Lambda.
 
 
+
+
+*`aws.lambda.metrics.Invocations.avg`*::
++
+--
+The number of times your function code is executed, including successful executions and executions that result in a function error.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.Errors.avg`*::
++
+--
+The number of invocations that result in a function error.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.DeadLetterErrors.avg`*::
++
+--
+For asynchronous invocation, the number of times Lambda attempts to send an event to a dead-letter queue but fails.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.DestinationDeliveryFailures.avg`*::
++
+--
+For asynchronous invocation, the number of times Lambda attempts to send an event to a destination but fails.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.Duration.avg`*::
++
+--
+The amount of time that your function code spends processing an event.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.Throttles.avg`*::
++
+--
+The number of invocation requests that are throttled.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.IteratorAge.avg`*::
++
+--
+For event source mappings that read from streams, the age of the last record in the event.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.ConcurrentExecutions.avg`*::
++
+--
+The number of function instances that are processing events.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.UnreservedConcurrentExecutions.avg`*::
++
+--
+For an AWS Region, the number of events that are being processed by functions that don't have reserved concurrency.
+
+type: double
+
+--
+
+*`aws.lambda.metrics.ProvisionedConcurrentExecutions.max`*::
++
+--
+The number of function instances that are processing events on provisioned concurrency.
+
+type: long
+
+--
+
+*`aws.lambda.metrics.ProvisionedConcurrencyUtilization.max`*::
++
+--
+For a version or alias, the value of ProvisionedConcurrentExecutions divided by the total amount of provisioned concurrency allocated.
+
+type: long
+
+--
+
+*`aws.lambda.metrics.ProvisionedConcurrencyInvocations.sum`*::
++
+--
+The number of times your function code is executed on provisioned concurrency.
+
+type: long
+
+--
+
+*`aws.lambda.metrics.ProvisionedConcurrencySpilloverInvocations.sum`*::
++
+--
+The number of times your function code is executed on standard concurrency when all provisioned concurrency is in use.
+
+type: long
+
+--
+
 [float]
 === natgateway
 
 `natgateway` contains the metrics from Cloudwatch to track usage of NAT gateway related resources.
 
+
+
+
+*`aws.natgateway.metrics.BytesInFromDestination.sum`*::
++
+--
+The number of bytes received by the NAT gateway from the destination.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.BytesInFromSource.sum`*::
++
+--
+The number of bytes received by the NAT gateway from clients in your VPC.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.BytesOutToDestination.sum`*::
++
+--
+The number of bytes sent out through the NAT gateway to the destination.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.BytesOutToSource.sum`*::
++
+--
+The number of bytes sent through the NAT gateway to the clients in your VPC.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.ConnectionAttemptCount.sum`*::
++
+--
+The number of connection attempts made through the NAT gateway.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.ConnectionEstablishedCount.sum`*::
++
+--
+The number of connections established through the NAT gateway.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.ErrorPortAllocation.sum`*::
++
+--
+The number of times the NAT gateway could not allocate a source port.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.IdleTimeoutCount.sum`*::
++
+--
+The number of connections that transitioned from the active state to the idle state.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.PacketsDropCount.sum`*::
++
+--
+The number of packets dropped by the NAT gateway.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.PacketsInFromDestination.sum`*::
++
+--
+The number of packets received by the NAT gateway from the destination.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.PacketsInFromSource.sum`*::
++
+--
+The number of packets received by the NAT gateway from clients in your VPC.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.PacketsOutToDestination.sum`*::
++
+--
+The number of packets sent out through the NAT gateway to the destination.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.PacketsOutToSource.sum`*::
++
+--
+The number of packets sent through the NAT gateway to the clients in your VPC.
+
+type: long
+
+--
+
+*`aws.natgateway.metrics.ActiveConnectionCount.max`*::
++
+--
+The total number of concurrent active TCP connections through the NAT gateway.
+
+type: long
+
+--
 
 [float]
 === rds
@@ -3255,6 +4095,107 @@ format: duration
 `sns` contains the metrics that were scraped from AWS CloudWatch which contains monitoring metrics sent by AWS SNS.
 
 
+
+
+*`aws.sns.metrics.PublishSize.avg`*::
++
+--
+The size of messages published.
+
+type: double
+
+--
+
+*`aws.sns.metrics.SMSSuccessRate.avg`*::
++
+--
+The rate of successful SMS message deliveries.
+
+type: double
+
+--
+
+*`aws.sns.metrics.NumberOfMessagesPublished.sum`*::
++
+--
+The number of messages published to your Amazon SNS topics.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsDelivered.sum`*::
++
+--
+The number of messages successfully delivered from your Amazon SNS topics to subscribing endpoints.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsFailed.sum`*::
++
+--
+The number of messages that Amazon SNS failed to deliver.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsFilteredOut.sum`*::
++
+--
+The number of messages that were rejected by subscription filter policies.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsFilteredOut-InvalidAttributes.sum`*::
++
+--
+The number of messages that were rejected by subscription filter policies because the messages' attributes are invalid - for example, because the attribute JSON is incorrectly formatted.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsFilteredOut-NoMessageAttributes.sum`*::
++
+--
+The number of messages that were rejected by subscription filter policies because the messages have no attributes.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsRedrivenToDlq.sum`*::
++
+--
+The number of messages that have been moved to a dead-letter queue.
+
+type: long
+
+--
+
+*`aws.sns.metrics.NumberOfNotificationsFailedToRedriveToDlq.sum`*::
++
+--
+The number of messages that couldn't be moved to a dead-letter queue.
+
+type: long
+
+--
+
+*`aws.sns.metrics.SMSMonthToDateSpentUSD.sum`*::
++
+--
+The charges you have accrued since the start of the current calendar month for sending SMS messages.
+
+type: long
+
+--
+
 [float]
 === sqs
 
@@ -3372,11 +4313,87 @@ type: keyword
 `transitgateway` contains the metrics from Cloudwatch to track usage of transit gateway related resources.
 
 
+
+
+*`aws.transitgateway.metrics.BytesIn.sum`*::
++
+--
+The number of bytes received by the transit gateway.
+
+type: long
+
+--
+
+*`aws.transitgateway.metrics.BytesOut.sum`*::
++
+--
+The number of bytes sent from the transit gateway.
+
+type: long
+
+--
+
+*`aws.transitgateway.metrics.PacketsIn.sum`*::
++
+--
+The number of packets received by the transit gateway.
+
+type: long
+
+--
+
+*`aws.transitgateway.metrics.PacketsOut.sum`*::
++
+--
+The number of packets sent by the transit gateway.
+
+type: long
+
+--
+
+*`aws.transitgateway.metrics.PacketDropCountBlackhole.sum`*::
++
+--
+The number of packets dropped because they matched a blackhole route.
+
+type: long
+
+--
+
+*`aws.transitgateway.metrics.PacketDropCountNoRoute.sum`*::
++
+--
+The number of packets dropped because they did not match a route.
+
+type: long
+
+--
+
 [float]
 === usage
 
 `usage` contains the metrics from Cloudwatch to track usage of some AWS resources.
 
+
+
+
+*`aws.usage.metrics.CallCount.sum`*::
++
+--
+The number of specified API operations performed in your account.
+
+type: long
+
+--
+
+*`aws.usage.metrics.ResourceCount.sum`*::
++
+--
+The number of the specified resources running in your account. The resources are defined by the dimensions associated with the metric.
+
+type: long
+
+--
 
 [float]
 === vpn
@@ -3384,8 +4401,37 @@ type: keyword
 `vpn` contains the metrics from Cloudwatch to track usage of VPN related resources.
 
 
+
+
+*`aws.vpn.metrics.TunnelState.avg`*::
++
+--
+The state of the tunnel. For static VPNs, 0 indicates DOWN and 1 indicates UP. For BGP VPNs, 1 indicates ESTABLISHED and 0 is used for all other states.
+
+type: double
+
+--
+
+*`aws.vpn.metrics.TunnelDataIn.sum`*::
++
+--
+The bytes received through the VPN tunnel.
+
+type: double
+
+--
+
+*`aws.vpn.metrics.TunnelDataOut.sum`*::
++
+--
+The bytes sent through the VPN tunnel.
+
+type: double
+
+--
+
 [[exported-fields-azure]]
-== azure fields
+== Azure fields
 
 azure module
 
@@ -3571,9 +4617,12 @@ Contains common beat fields available in all event types.
 *`agent.hostname`*::
 +
 --
-Hostname of the agent.
+Deprecated - use agent.name or agent.id to identify an agent.
 
-type: keyword
+
+type: alias
+
+alias to: agent.name
 
 --
 
@@ -3610,7 +4659,7 @@ alias to: host.name
 --
 type: alias
 
-alias to: agent.hostname
+alias to: agent.name
 
 --
 
@@ -4911,7 +5960,7 @@ alias to: cloud.region
 --
 
 [[exported-fields-cloudfoundry]]
-== cloudfoundry fields
+== Cloudfoundry fields
 
 Cloud Foundry module
 
@@ -5183,7 +6232,7 @@ type: keyword
 --
 
 [[exported-fields-consul]]
-== consul fields
+== Consul fields
 
 Consul module
 
@@ -5302,7 +6351,7 @@ type: long
 --
 
 [[exported-fields-coredns]]
-== coredns fields
+== Coredns fields
 
 coredns Module
 
@@ -5603,7 +6652,7 @@ format: bytes
 Number of disk fetches.
 
 
-type: long
+type: double
 
 --
 
@@ -5661,7 +6710,7 @@ format: percent
 Number of operations per second.
 
 
-type: long
+type: double
 
 --
 
@@ -5758,7 +6807,7 @@ type: long
 Memory quota setting for the Index service (Mbyte).
 
 
-type: long
+type: double
 
 --
 
@@ -5768,7 +6817,7 @@ type: long
 Memory quota setting for the cluster (Mbyte).
 
 
-type: long
+type: double
 
 --
 
@@ -5869,7 +6918,7 @@ Couchbase node metrics.
 Number of get commands
 
 
-type: long
+type: double
 
 --
 
@@ -15703,7 +16752,7 @@ type: keyword
 --
 
 [[exported-fields-envoyproxy]]
-== envoyproxy fields
+== Envoyproxy fields
 
 envoyproxy module
 
@@ -17178,6 +18227,9 @@ GCP module
 *`googlecloud.labels`*::
 +
 --
+Google cloud monitoring metrics labels
+
+
 type: object
 
 --
@@ -17329,6 +18381,43 @@ type: long
 
 --
 
+
+*`googlecloud.compute.instance.memory.balloon.ram_size.value`*::
++
+--
+The total amount of memory in the VM. This metric is only available for VMs that belong to the e2 family.
+
+type: long
+
+--
+
+*`googlecloud.compute.instance.memory.balloon.ram_used.value`*::
++
+--
+Memory currently used in the VM. This metric is only available for VMs that belong to the e2 family.
+
+type: long
+
+--
+
+*`googlecloud.compute.instance.memory.balloon.swap_in_bytes_count.value`*::
++
+--
+The amount of memory read into the guest from its own swap space. This metric is only available for VMs that belong to the e2 family.
+
+type: long
+
+--
+
+*`googlecloud.compute.instance.memory.balloon.swap_out_bytes_count.value`*::
++
+--
+The amount of memory written from the guest to its own swap space. This metric is only available for VMs that belong to the e2 family.
+
+type: long
+
+--
+
 [float]
 === loadbalancing
 
@@ -17340,57 +18429,6 @@ Google Cloud Load Balancing metrics
 
 Google Cloud Load Balancing metrics
 
-
-[float]
-=== backend_latencies
-
-A distribution of the latency calculated from when the request was sent by the proxy to the backend until the proxy received from the backend the last byte of response.
-
-
-*`googlecloud.loadbalancing.https.backend_latencies.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.backend_latencies.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.backend_latencies.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.https.backend_latencies.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.https.backend_latencies.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.backend_latencies.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
-type: long
-
---
 
 *`googlecloud.loadbalancing.https.backend_request_bytes_count.value`*::
 +
@@ -17406,196 +18444,6 @@ type: long
 --
 The number of requests served by backends of HTTP/S load balancer.
 
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.backend_response_bytes_count.value`*::
-+
---
-The number of bytes sent as responses from backends (or cache) to HTTP/S load balancer.
-
-type: long
-
---
-
-[float]
-=== frontend_tcp_rtt
-
-A distribution of the RTT measured for each connection between client and proxy.
-
-
-*`googlecloud.loadbalancing.https.frontend_tcp_rtt.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.frontend_tcp_rtt.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.frontend_tcp_rtt.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.https.frontend_tcp_rtt.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.https.frontend_tcp_rtt.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.frontend_tcp_rtt.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
-type: long
-
---
-
-
-[float]
-=== backend_latencies
-
-A distribution of the latency calculated from when the request was sent by the proxy to the backend until the proxy received from the backend the last byte of response.
-
-
-*`googlecloud.loadbalancing.https.internal.backend_latencies.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.backend_latencies.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.backend_latencies.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.https.internal.backend_latencies.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.https.internal.backend_latencies.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.backend_latencies.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.request_bytes_count.value`*::
-+
---
-The number of bytes sent as requests from clients to HTTP/S load balancer.
-
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.request_count.value`*::
-+
---
-The number of requests served by HTTP/S load balancer.
-
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.response_bytes_count.value`*::
-+
---
-The number of bytes sent as responses from HTTP/S load balancer to clients.
-
-type: long
-
---
-
-[float]
-=== total_latencies
-
-A distribution of the latency calculated from when the request was received by the proxy until the proxy got ACK from client on last response byte.
-
-
-*`googlecloud.loadbalancing.https.internal.total_latencies.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.total_latencies.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.total_latencies.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.https.internal.total_latencies.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.https.internal.total_latencies.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.internal.total_latencies.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
 type: long
 
 --
@@ -17623,57 +18471,6 @@ type: long
 --
 The number of bytes sent as responses from HTTP/S load balancer to clients.
 
-type: long
-
---
-
-[float]
-=== total_latencies
-
-A distribution of the latency calculated from when the request was received by the proxy until the proxy got ACK from client on last response byte.
-
-
-*`googlecloud.loadbalancing.https.total_latencies.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.total_latencies.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.total_latencies.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.https.total_latencies.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.https.total_latencies.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.https.total_latencies.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
 type: long
 
 --
@@ -17721,57 +18518,6 @@ type: long
 --
 
 [float]
-=== rtt_latencies
-
-A distribution of RTT measured over TCP connections for ILB flows.
-
-
-*`googlecloud.loadbalancing.l3.internal.rtt_latencies.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.l3.internal.rtt_latencies.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.l3.internal.rtt_latencies.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.l3.internal.rtt_latencies.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.l3.internal.rtt_latencies.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.l3.internal.rtt_latencies.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
-type: long
-
---
-
-[float]
 === tcp_ssl_proxy
 
 Google Cloud Load Balancing metrics
@@ -17791,57 +18537,6 @@ type: long
 --
 Number of bytes sent from VM to client using proxy.
 
-type: long
-
---
-
-[float]
-=== frontend_tcp_rtt
-
-A distribution of the smoothed RTT (in ms) measured by the proxy's TCP stack, each minute application layer bytes pass from proxy to client.
-
-
-*`googlecloud.loadbalancing.tcp_ssl_proxy.frontend_tcp_rtt.count.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.tcp_ssl_proxy.frontend_tcp_rtt.mean.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.tcp_ssl_proxy.frontend_tcp_rtt.bucket_counts.value`*::
-+
---
-type: long
-
---
-
-
-
-
-*`googlecloud.loadbalancing.tcp_ssl_proxy.frontend_tcp_rtt.bucket_options.Options.ExponentialBuckets.growth_factor.value`*::
-+
---
-type: double
-
---
-
-*`googlecloud.loadbalancing.tcp_ssl_proxy.frontend_tcp_rtt.bucket_options.Options.ExponentialBuckets.scale.value`*::
-+
---
-type: long
-
---
-
-*`googlecloud.loadbalancing.tcp_ssl_proxy.frontend_tcp_rtt.bucket_options.Options.ExponentialBuckets.num_finite_buckets.value`*::
-+
---
 type: long
 
 --
@@ -18491,6 +19186,16 @@ type: long
 
 --
 
+*`haproxy.info.threads`*::
++
+--
+Number of threads.
+
+
+type: long
+
+--
+
 *`haproxy.info.pid`*::
 +
 --
@@ -18506,6 +19211,76 @@ alias to: process.pid
 *`haproxy.info.run_queue`*::
 +
 --
+
+
+type: long
+
+--
+
+*`haproxy.info.stopping`*::
++
+--
+Number of stopping jobs.
+
+
+type: long
+
+--
+
+*`haproxy.info.jobs`*::
++
+--
+Number of all jobs.
+
+
+type: long
+
+--
+
+*`haproxy.info.unstoppable_jobs`*::
++
+--
+Number of unstoppable jobs.
+
+
+type: long
+
+--
+
+*`haproxy.info.listeners`*::
++
+--
+Number of listeners.
+
+
+type: long
+
+--
+
+*`haproxy.info.dropped_logs`*::
++
+--
+Number of dropped logs.
+
+
+type: long
+
+--
+
+*`haproxy.info.busy_polling`*::
++
+--
+Number of busy polling.
+
+
+type: long
+
+--
+
+*`haproxy.info.failed_resolutions`*::
++
+--
+Number of failed resolutions.
 
 
 type: long
@@ -18543,6 +19318,80 @@ format: bytes
 
 --
 
+
+
+*`haproxy.info.bytes.out.total`*::
++
+--
+Number of bytes sent out.
+
+
+type: long
+
+--
+
+*`haproxy.info.bytes.out.rate`*::
++
+--
+Average bytes output rate.
+
+
+type: long
+
+--
+
+
+*`haproxy.info.peers.active`*::
++
+--
+Number of active peers.
+
+
+type: long
+
+--
+
+*`haproxy.info.peers.connected`*::
++
+--
+Number of connected peers.
+
+
+type: long
+
+--
+
+
+*`haproxy.info.pool.allocated`*::
++
+--
+Size of the allocated pool.
+
+
+type: long
+
+--
+
+*`haproxy.info.pool.used`*::
++
+--
+Number of members used from the allocated pool.
+
+
+type: long
+
+--
+
+*`haproxy.info.pool.failed`*::
++
+--
+Number of failed connections to pool members.
+
+
+type: long
+
+--
+
 *`haproxy.info.ulimit_n`*::
 +
 --
@@ -18568,6 +19417,7 @@ type: long
 *`haproxy.info.compress.bps.in`*::
 +
 --
+Incoming compressed data in bits per second.
 
 
 type: long
@@ -18577,6 +19427,7 @@ type: long
 *`haproxy.info.compress.bps.out`*::
 +
 --
+Outgoing compressed data in bits per second.
 
 
 type: long
@@ -18586,6 +19437,7 @@ type: long
 *`haproxy.info.compress.bps.rate_limit`*::
 +
 --
+Rate limit of compressed data in bits per second.
 
 
 type: long
@@ -18607,6 +19459,7 @@ type: long
 *`haproxy.info.connection.rate.value`*::
 +
 --
+Number of connections in the last second.
 
 
 type: long
@@ -18616,6 +19469,7 @@ type: long
 *`haproxy.info.connection.rate.limit`*::
 +
 --
+Rate limit of connections.
 
 
 type: long
@@ -18625,6 +19479,7 @@ type: long
 *`haproxy.info.connection.rate.max`*::
 +
 --
+Maximum rate of connections.
 
 
 type: long
@@ -18703,6 +19558,7 @@ type: long
 *`haproxy.info.requests.total`*::
 +
 --
+Total number of requests.
 
 
 type: long
@@ -18712,6 +19568,7 @@ type: long
 *`haproxy.info.sockets.max`*::
 +
 --
+Maximum number of sockets.
 
 
 type: long
@@ -18721,6 +19578,7 @@ type: long
 *`haproxy.info.requests.max`*::
 +
 --
+Maximum number of requests.
 
 
 type: long
@@ -18736,6 +19594,7 @@ type: long
 *`haproxy.info.pipes.used`*::
 +
 --
+Number of used pipes during kernel-based tcp splicing.
 
 
 type: integer
@@ -18745,6 +19604,7 @@ type: integer
 *`haproxy.info.pipes.free`*::
 +
 --
+Number of free pipes.
 
 
 type: integer
@@ -18754,6 +19614,7 @@ type: integer
 *`haproxy.info.pipes.max`*::
 +
 --
+Maximum number of used pipes.
 
 
 type: integer
@@ -18769,6 +19630,7 @@ None
 *`haproxy.info.session.rate.value`*::
 +
 --
+Rate of session per seconds.
 
 
 type: integer
@@ -18778,6 +19640,7 @@ type: integer
 *`haproxy.info.session.rate.limit`*::
 +
 --
+Rate limit of sessions.
 
 
 type: integer
@@ -18787,6 +19650,7 @@ type: integer
 *`haproxy.info.session.rate.max`*::
 +
 --
+Maximum rate of sessions.
 
 
 type: integer
@@ -18802,7 +19666,8 @@ None
 *`haproxy.info.ssl.rate.value`*::
 +
 --
-None
+Rate of SSL requests.
+
 
 type: integer
 
@@ -18811,7 +19676,8 @@ type: integer
 *`haproxy.info.ssl.rate.limit`*::
 +
 --
-None
+Rate limit of SSL requests.
+
 
 type: integer
 
@@ -18820,7 +19686,8 @@ type: integer
 *`haproxy.info.ssl.rate.max`*::
 +
 --
-None
+Maximum rate of SSL requests.
+
 
 type: integer
 
@@ -18835,7 +19702,8 @@ None
 *`haproxy.info.ssl.frontend.key_rate.value`*::
 +
 --
-None
+Key rate of SSL frontend.
+
 
 type: integer
 
@@ -18844,7 +19712,8 @@ type: integer
 *`haproxy.info.ssl.frontend.key_rate.max`*::
 +
 --
-None
+Maximum key rate of SSL frontend.
+
 
 type: integer
 
@@ -18853,7 +19722,8 @@ type: integer
 *`haproxy.info.ssl.frontend.session_reuse.pct`*::
 +
 --
-None
+Rate of reuse of SSL frontend sessions.
+
 
 type: scaled_float
 
@@ -18870,7 +19740,8 @@ None
 *`haproxy.info.ssl.backend.key_rate.value`*::
 +
 --
-None
+Key rate of SSL backend sessions.
+
 
 type: integer
 
@@ -18879,7 +19750,8 @@ type: integer
 *`haproxy.info.ssl.backend.key_rate.max`*::
 +
 --
-MaxConnRate
+Maximum key rate of SSL backend sessions.
+
 
 type: integer
 
@@ -18888,7 +19760,8 @@ type: integer
 *`haproxy.info.ssl.cached_lookups`*::
 +
 --
-None
+Number of SSL cache lookups.
+
 
 type: long
 
@@ -18897,7 +19770,8 @@ type: long
 *`haproxy.info.ssl.cache_misses`*::
 +
 --
-None
+Number of SSL cache misses.
+
 
 type: long
 
@@ -18912,6 +19786,7 @@ type: long
 *`haproxy.info.zlib_mem_usage.value`*::
 +
 --
+Memory usage of zlib.
 
 
 type: integer
@@ -18921,6 +19796,7 @@ type: integer
 *`haproxy.info.zlib_mem_usage.max`*::
 +
 --
+Maximum memory usage of zlib.
 
 
 type: integer
@@ -18930,6 +19806,7 @@ type: integer
 *`haproxy.info.idle.pct`*::
 +
 --
+Percentage of idle time.
 
 
 type: scaled_float
@@ -19073,6 +19950,26 @@ type: long
 
 --
 
+*`haproxy.stat.cookie`*::
++
+--
+Cookie value of the server or the name of the cookie of the backend.
+
+
+type: keyword
+
+--
+
+*`haproxy.stat.load_balancing_algorithm`*::
++
+--
+Load balancing algorithm.
+
+
+type: keyword
+
+--
+
 
 *`haproxy.stat.connection.total`*::
 +
@@ -19104,6 +20001,88 @@ type: long
 
 --
 
+*`haproxy.stat.connection.rate`*::
++
+--
+Number of connections over the last second.
+
+
+type: long
+
+--
+
+*`haproxy.stat.connection.rate_max`*::
++
+--
+Highest value of connection.rate.
+
+
+type: long
+
+--
+
+*`haproxy.stat.connection.attempt.total`*::
++
+--
+Number of connection establishment attempts.
+
+
+type: long
+
+--
+
+*`haproxy.stat.connection.reuse.total`*::
++
+--
+Number of connection reuses.
+
+
+type: long
+
+--
+
+
+*`haproxy.stat.connection.idle.total`*::
++
+--
+Number of idle connections available for reuse.
+
+
+type: long
+
+--
+
+*`haproxy.stat.connection.idle.limit`*::
++
+--
+Limit on idle connections available for reuse.
+
+
+type: long
+
+--
+
+
+*`haproxy.stat.connection.cache.lookup.total`*::
++
+--
+Number of cache lookups.
+
+
+type: long
+
+--
+
+*`haproxy.stat.connection.cache.hits`*::
++
+--
+Number of cache hits.
+
+
+type: long
+
+--
+
 
 *`haproxy.stat.request.denied`*::
 +
@@ -19112,6 +20091,26 @@ Requests denied because of security concerns.
 
   * For TCP this is because of a matched tcp-request content rule.
   * For HTTP this is because of a matched http-request or tarpit rule.
+
+
+type: long
+
+--
+
+*`haproxy.stat.request.denied_by_connection_rules`*::
++
+--
+Requests denied because of TCP request connection rules.
+
+
+type: long
+
+--
+
+*`haproxy.stat.request.denied_by_session_rules`*::
++
+--
+Requests denied because of TCP request session rules.
 
 
 type: long
@@ -19205,6 +20204,16 @@ type: long
 +
 --
 Total number of HTTP requests received.
+
+
+type: long
+
+--
+
+*`haproxy.stat.request.intercepted`*::
++
+--
+Number of intercepted requests.
 
 
 type: long
@@ -19310,6 +20319,19 @@ type: long
 --
 
 
+
+
+*`haproxy.stat.header.rewrite.failed.total`*::
++
+--
+Number of failed header rewrite warnings.
+
+
+type: long
+
+--
+
+
 *`haproxy.stat.session.current`*::
 +
 --
@@ -19334,6 +20356,16 @@ type: long
 +
 --
 Configured session limit.
+
+
+type: long
+
+--
+
+*`haproxy.stat.session.total`*::
++
+--
+Number of all sessions.
 
 
 type: long
@@ -19609,6 +20641,16 @@ type: keyword
 
 --
 
+*`haproxy.stat.proxy.mode`*::
++
+--
+Proxy mode (tcp, http, health, unknown).
+
+
+type: keyword
+
+--
+
 [float]
 === queue
 
@@ -19632,6 +20674,144 @@ The average queue time in ms over the last 1024 requests.
 
 
 type: integer
+
+--
+
+[float]
+=== agent
+
+
+
+
+*`haproxy.stat.agent.status`*::
++
+--
+Status of the last health check. One of:
+
+  UNK     -> unknown
+  INI     -> initializing
+  SOCKERR -> socket error
+  L4OK    -> check passed on layer 4, no upper layers enabled
+  L4TOUT  -> layer 1-4 timeout
+  L4CON   -> layer 1-4 connection problem, for example
+            "Connection refused" (tcp rst) or "No route to host" (icmp)
+  L7OK    -> agent reported "up"
+  L7STS   -> agent reported "fail", "stop" or "down"
+
+
+type: keyword
+
+--
+
+*`haproxy.stat.agent.description`*::
++
+--
+Human readable version of agent.status.
+
+
+type: keyword
+
+--
+
+*`haproxy.stat.agent.code`*::
++
+--
+Value reported by agent.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.rise`*::
++
+--
+Rise value of agent.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.fall`*::
++
+--
+Fall value of agent.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.health`*::
++
+--
+Health parameter of agent. Between 0 and `agent.rise`+`agent.fall`-1.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.duration`*::
++
+--
+Duration of the last check in ms.
+
+
+type: integer
+
+--
+
+
+*`haproxy.stat.agent.check.rise`*::
++
+--
+Rise value of server.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.check.fall`*::
++
+--
+Fall value of server.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.check.health`*::
++
+--
+Health parameter of server. Between 0 and `agent.check.rise`+`agent.check.fall`-1.
+
+
+type: integer
+
+--
+
+*`haproxy.stat.agent.check.description`*::
++
+--
+Human readable version of check.
+
+
+type: keyword
+
+--
+
+
+*`haproxy.stat.source.address`*::
++
+--
+Address of the source.
+
+
+type: text
 
 --
 
@@ -19769,7 +20949,7 @@ IBM MQ module
 
 
 [[exported-fields-iis]]
-== iis fields
+== IIS fields
 
 iis module
 
@@ -19819,7 +20999,7 @@ type: object
 --
 
 [[exported-fields-istio]]
-== istio fields
+== Istio fields
 
 istio Module
 
@@ -23561,6 +24741,16 @@ type: date
 
 --
 
+*`kubernetes.event.metadata.generate_name`*::
++
+--
+Generate name of the event
+
+
+type: keyword
+
+--
+
 *`kubernetes.event.metadata.name`*::
 +
 --
@@ -25462,7 +26652,7 @@ type: keyword
 --
 Ingress Hostname
 
-type: ip
+type: keyword
 
 --
 
@@ -25803,11 +26993,31 @@ type: long
 --
 
 [[exported-fields-kvm]]
-== kvm fields
+== KVM fields
 
 kvm module
 
 
+
+*`kvm.id`*::
++
+--
+Domain id
+
+
+type: long
+
+--
+
+*`kvm.name`*::
++
+--
+Domain name
+
+
+type: keyword
+
+--
 
 [float]
 === kvm
@@ -25866,6 +27076,345 @@ Domain name
 
 
 type: keyword
+
+--
+
+[float]
+=== status
+
+status
+
+
+
+*`kvm.status.state`*::
++
+--
+Domain state
+
+
+type: keyword
+
+--
+
+[[exported-fields-linux]]
+== linux fields
+
+linux module
+
+
+
+[float]
+=== linux
+
+
+
+
+[float]
+=== conntrack
+
+conntrack
+
+
+
+[float]
+=== summary
+
+summary of nf_conntrack statistics, summed across CPU cores
+
+
+
+*`linux.conntrack.summary.drop`*::
++
+--
+packets dropped due to conntrack failiure
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.early_drop`*::
++
+--
+conntrack entries dropped to make room for new ones
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.entries`*::
++
+--
+entries in the conntrack table
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.found`*::
++
+--
+successfully searched entries
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.ignore`*::
++
+--
+packets seen already connected to a conntrack entry
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.insert_failed`*::
++
+--
+Number of entries where list insert insert failed 
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.invalid`*::
++
+--
+packets seen that cannot be tracked
+
+
+type: long
+
+--
+
+*`linux.conntrack.summary.search_restart`*::
++
+--
+table lookups which had to be restarted due to table resizes
+
+
+type: long
+
+--
+
+[float]
+=== ksm
+
+ksm
+
+
+
+[float]
+=== stats
+
+KSM statistics
+
+
+
+*`linux.ksm.stats.pages_shared`*::
++
+--
+Shared pages in use.
+
+
+type: long
+
+--
+
+*`linux.ksm.stats.pages_sharing`*::
++
+--
+Sites sharing pages.
+
+
+type: long
+
+--
+
+*`linux.ksm.stats.pages_unshared`*::
++
+--
+Unique pages.
+
+
+type: long
+
+--
+
+*`linux.ksm.stats.full_scans`*::
++
+--
+Number of times mergable pages have been scanned.
+
+
+type: long
+
+--
+
+*`linux.ksm.stats.stable_node_chains`*::
++
+--
+Pages that have reached max_page_sharing.
+
+
+type: long
+
+--
+
+*`linux.ksm.stats.stable_node_dups`*::
++
+--
+Number of duplicated KSM pages.
+
+
+type: long
+
+--
+
+[float]
+=== pageinfo
+
+pageinfo
+
+
+
+[float]
+=== buddy_info
+
+Data from /proc/buddyinfo grouping used pages by order
+
+
+
+[float]
+=== DMA
+
+DMA page Data
+
+
+
+*`linux.pageinfo.buddy_info.DMA.0`*::
++
+--
+free chunks of 2^0*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.1`*::
++
+--
+free chunks of 2^1*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.2`*::
++
+--
+free chunks of 2^2*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.3`*::
++
+--
+free chunks of 2^3*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.4`*::
++
+--
+free chunks of 2^4*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.5`*::
++
+--
+free chunks of 2^5*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.6`*::
++
+--
+free chunks of 2^6*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.7`*::
++
+--
+free chunks of 2^7*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.8`*::
++
+--
+free chunks of 2^8*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.9`*::
++
+--
+free chunks of 2^9*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.buddy_info.DMA.10`*::
++
+--
+free chunks of 2^10*PAGE_SIZE
+
+
+type: long
+
+--
+
+*`linux.pageinfo.nodes.*`*::
++
+--
+Raw allocation info from /proc/pagetypeinfo
+
+
+type: object
 
 --
 
@@ -31213,7 +32762,7 @@ type: long
 --
 
 [[exported-fields-nats]]
-== Nats fields
+== NATS fields
 
 nats Module
 
@@ -35531,7 +37080,7 @@ Redis metrics collected from Redis Enterprise Server.
 
 
 [[exported-fields-sql]]
-== sql fields
+== SQL fields
 
 SQL module fetches metrics from a SQL database
 
@@ -39508,7 +41057,7 @@ type: long
 --
 
 [[exported-fields-traefik]]
-== traefik fields
+== Traefik fields
 
 Traefik reverse proxy / load balancer metrics
 
@@ -39576,7 +41125,7 @@ type: object
 --
 
 [[exported-fields-uwsgi]]
-== uwsgi fields
+== uWSGI fields
 
 uwsgi module
 
