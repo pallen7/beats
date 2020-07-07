@@ -55,6 +55,8 @@ func (pub *transPub) createEvent(tran *transaction) beat.Event {
 		mssqlrequest["sql_batch"] = tran.sqlBatch
 	}
 
+	// todo: Add in support for sendRequest & sendResponse config options
+
 	mssqlrequest["proc_name"] = tran.procName
 
 	mssqlresponse := common.MapStr{

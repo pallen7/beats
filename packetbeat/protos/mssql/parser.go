@@ -9,28 +9,22 @@ import (
 	"unicode/utf16"
 
 	"github.com/elastic/beats/v7/libbeat/common/streambuf"
-	"github.com/elastic/beats/v7/libbeat/logp"
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
 type messageHeader struct {
-	messageType byte
-	status      byte
-	// length	int (bytes 3&4)
-	// spid 	(bytes 5&6)
-	// packetId	(byte 7)
+	messageType   byte
+	messageStatus byte
 }
 
 type parserConfig struct {
 	maxBytes int
 }
 
-// It doesn't represent an individual packet that's being processed but a complete message request or response
 type message struct {
-	// Set these variables based on the first request that we get
 	applayer.Message
+	header *messageHeader
 
-	messageType  byte // todo: remove this and move messageHeader into message
 	colDataTypes []byte
 	rowsReturned int
 	resultSets   int
@@ -39,17 +33,16 @@ type message struct {
 }
 
 type parser struct {
-	sqlConn *sqlConnection
+	config *parserConfig
 
-	buf       streambuf.Buffer
-	config    *parserConfig
-	message   *message
+	buf     streambuf.Buffer
+	sqlConn *sqlConnection // Required to indicate whether column encryption has been negotiated. Affects how we parse colmeta
+	message *message
+
 	onMessage func(m *message) error
-	header    *messageHeader // Move into message
 }
 
-// Error code if stream exceeds max allowed size on append.
-// Todo: Add in relevant error codes
+// todo: Add in relevant error codes
 var (
 	ErrStreamTooLarge = errors.New("Stream data too large")
 )
@@ -68,7 +61,7 @@ func (p *parser) init(
 func (p *parser) append(data []byte) error {
 
 	// Once validated then append data portion of the packet to the buffer to buffer
-	if _, err := p.buf.Write(data[8:]); err != nil {
+	if _, err := p.buf.Write(data[headerLen:]); err != nil {
 		return err
 	}
 
@@ -80,77 +73,65 @@ func (p *parser) append(data []byte) error {
 
 func (p *parser) feed(ts time.Time, data []byte, requestType byte, connInfo *sqlConnection) error {
 
-	if len(data) < 8 {
-		// todo: not sure if empty buffer should be an error
-		return fmt.Errorf("Empty(ish) buffer. Length: %d", len(data))
+	if len(data) < headerLen {
+		return nil
 	}
-
-	// We need to parse the header at this point and only append the data
-	header, err := readHeader(data)
-	if err != nil {
-		return err
-	}
-
-	// Validate the header - check that the header we now have reflects what we were previously processing (if we were already processing)
 
 	if p.message == nil {
-		// allocate new message object to be used by parser with current timestamp
 		p.message = p.newMessage(ts)
 	}
 
-	// Need to set to the latest header in case we have now completed:
-	p.header = header
+	p.parseHeader(data)
 
-	// This will append the data portion of the packet
+	// This will append the data portion of the packet (minus the header)
 	if err := p.append(data); err != nil {
 		return err
 	}
 
-	// Not sure if this should be an error?
-	if ignoreMessage(p.header) {
-		//return fmt.Errorf("Ignoring message")
+	// Wait for more data if incomplete
+	if !isComplete(p.message.header) {
 		return nil
 	}
 
-	// Wait for more data if incomplete
-	if !isComplete(p.header) {
-		return nil
+	if ignoreMessage(p.message.header) {
+		return fmt.Errorf("Header indicates to ignore message")
 	}
 
 	p.sqlConn = connInfo
 
 	if err := p.parse(requestType); err != nil {
-
-		logp.Info("\n** Error: Complete buffer: % x\n", p.buf.BufferedBytes())
-
-		data := make([]byte, p.buf.Len())
-		p.buf.Read(data)
-		if len(data) > 500 {
-			logp.Info("\n** Error: Remaining data in buffer: % x\n   Header: %v", data[:500], p.header)
-		} else {
-			logp.Info("\n** Error: Remaining data in buffer: % x\n   Header: %v", data, p.header)
+		debugf("parse error. Header: %v", p.message.header)
+		// On error read the previous 32 bytes and the next 32 bytes
+		consumed := p.buf.BufferConsumed()
+		if consumed > 32 {
+			consumed = 32
 		}
+		consumedBuffer := make([]byte, consumed)
+		p.buf.Advance(consumed * -1)
+		p.buf.Read(consumedBuffer)
+		debugf("parse error. Previous %d bytes in buffer: % x", consumed, consumedBuffer)
+
+		remaining := p.buf.Len()
+		if remaining > 16 {
+			remaining = 16
+		}
+		remainingBuffer := make([]byte, remaining)
+		p.buf.Read(remainingBuffer)
+		debugf("parse error. Next %d bytes in buffer: % x", remaining, remainingBuffer)
 		return err
 	}
 
-	if err := p.onMessage(p.message); err != nil {
-		// Do we need to reset if we error?
-		p.buf.Reset()
-		p.header = &messageHeader{}
-		p.message = nil
-		return err
-	}
+	err := p.onMessage(p.message)
 
-	// Reset parser
+	// Reset the data fields in the parser
 	p.buf.Reset()
-	p.header = &messageHeader{}
+	p.message.header = &messageHeader{}
 	p.message = nil
 
-	return nil
+	return err
 }
 
 func (p *parser) newMessage(ts time.Time) *message {
-	logp.Info("parser.newMessage()")
 	return &message{
 		Message: applayer.Message{
 			Ts: ts,
@@ -159,40 +140,47 @@ func (p *parser) newMessage(ts time.Time) *message {
 }
 
 func (p *parser) parse(requestType byte) error {
+	p.message.IsRequest = true
 
-	p.message.messageType = p.header.messageType
-	switch p.header.messageType {
+	switch p.message.header.messageType {
+	case preTds7LoginMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	case attentionSignalMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	case bulkLoadDataMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	case federatedAuthenticationTokenMesage:
+		return p.buf.Advance(p.buf.Len())
+
+	case transactionManagerRequestMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	case tds7LoginMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	case sspiMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	case preLoginMessage:
+		return p.buf.Advance(p.buf.Len())
+
+	// Only parse the data for batch, rpc & result messages:
 	case sqlBatchMessage:
-		p.message.IsRequest = true
-
-		// Skip over the header (header length - the 4 Bytes that we have just read)
-		headerLen, err := p.readUInt32(littleEndian)
+		err := p.advanceAllHeaders()
 		if err != nil {
 			return err
 		}
-		p.buf.Advance(int(headerLen) - 4)
-
 		// Read the rest of the packet data
 		p.message.sqlBatch, err = p.readUCS2String(p.buf.Len())
-		if err != nil {
-			return err
-		}
+		return err
 
-		logp.Info("** sqlbatch: %s", p.message.sqlBatch)
-
-	case preTds7LoginMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
 	case rpcMessage:
-		// Can't recreate this from SSMS so will need to write a proggie to exercise RPC
-		p.message.IsRequest = true
-
-		// Skip over the header (header length - the 4 Bytes that we have just read)
-		headerLen, err := p.readUInt32(littleEndian)
-		if err != nil {
+		if err := p.advanceAllHeaders(); err != nil {
 			return err
 		}
-		p.buf.Advance(int(headerLen) - 4)
 
 		nameLen, err := p.readUInt16(littleEndian)
 		if err != nil {
@@ -201,56 +189,23 @@ func (p *parser) parse(requestType byte) error {
 
 		// 0xFFFF represents a proc id
 		if int(nameLen) != 65535 {
-			logp.Info("** nameLen: %d**", int(nameLen))
 			if p.message.procName, err = p.readUCS2String(int(nameLen) * 2); err != nil {
 				return err
 			}
 		}
-
-		logp.Info("** procName: %s", p.message.procName)
-
-		p.buf.Advance(p.buf.Len())
+		return p.buf.Advance(p.buf.Len())
 
 	case tabularResultMessage:
 		p.message.IsRequest = false
 
 		if requestType == preLoginMessage || requestType == attentionSignalMessage {
-			p.buf.Advance(p.buf.Len())
-			break
+			return p.buf.Advance(p.buf.Len())
 		}
 
-		if err := parseTokenStream(p); err != nil {
-			return err
-		}
-
-	case attentionSignalMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	case bulkLoadDataMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	case federatedAuthenticationTokenMesage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	case transactionManagerRequestMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	case tds7LoginMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	case sspiMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	case preLoginMessage:
-		p.message.IsRequest = true
-		p.buf.Advance(p.buf.Len())
-	default:
-		return fmt.Errorf("Unrecognised message type: 0x%x", p.header.messageType)
+		return parseTokenStream(p)
 	}
 
-	logp.Info("Finished reading 0x%x packet. Remaining data: %d bytes", p.header.messageType, p.buf.Len())
-
-	return nil
+	return fmt.Errorf("Unrecognised message type: 0x%x", p.message.header.messageType)
 }
 
 func parseTokenStream(p *parser) error {
@@ -451,20 +406,26 @@ func readColumnMetadata(p *parser, columnCount int) (colType []byte, err error) 
 }
 
 func ignoreMessage(header *messageHeader) bool {
-	return header.status&ignoreStatus == ignoreStatus && header.status&eomStatus == eomStatus
+	return header.messageStatus&ignoreStatus == ignoreStatus && header.messageStatus&eomStatus == eomStatus
 }
 
 func isComplete(header *messageHeader) bool {
-	return header.status&eomStatus == eomStatus
+	return header.messageStatus&eomStatus == eomStatus
 }
 
-func readHeader(data []byte) (header *messageHeader, err error) {
-	logp.Info("** Parsing header: % x", data[:8])
-	header = &messageHeader{
-		messageType: data[0],
-		status:      data[1],
+func (p *parser) parseHeader(data []byte) {
+	p.message.header = &messageHeader{
+		messageType:   data[0],
+		messageStatus: data[1],
 	}
-	return
+}
+
+func (p *parser) advanceAllHeaders() error {
+	headerLen, err := p.readUInt32(littleEndian)
+	if err != nil {
+		return err
+	}
+	return p.buf.Advance(int(headerLen) - 4)
 }
 
 func advanceRowValue(p *parser, dataType byte) error {

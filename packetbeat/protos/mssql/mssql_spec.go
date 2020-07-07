@@ -96,3 +96,7 @@ const (
 	sspiMessage                        = 0x11
 	preLoginMessage                    = 0x12
 )
+
+const (
+	headerLen = 8
+)

@@ -50,7 +50,6 @@ func (trans *transaction) onMessage(
 	dir uint8,
 	msg *message,
 ) error {
-	logp.Info("trans.onMessage()")
 	var err error
 
 	// Todo: At this point we need to copy everything from our completed message into our Transaction before the message is cleared
@@ -60,14 +59,10 @@ func (trans *transaction) onMessage(
 	msg.CmdlineTuple = procs.ProcWatcher.FindProcessesTuple(&msg.Tuple, msg.Transport)
 
 	if msg.IsRequest {
-		if isDebug {
-			debugf("Received request with tuple: %s", tuple)
-		}
+		debugf("Received request with tuple: %s", tuple)
 		err = trans.onRequest(tuple, dir, msg)
 	} else {
-		if isDebug {
-			debugf("Received response with tuple: %s", tuple)
-		}
+		debugf("Received response with tuple: %s", tuple)
 		err = trans.onResponse(tuple, dir, msg)
 		trans.resetData()
 	}
@@ -82,14 +77,12 @@ func (trans *transaction) onRequest(
 	dir uint8,
 	msg *message,
 ) error {
-	logp.Info("trans.onRequest()")
-
 	// todo: Create our Transaction information based on the request message
 
 	// If request already exists then (log an error and?) replace the request
 
 	trans.InitWithMsg("mssql", &msg.Message)
-	trans.requestType = msg.messageType
+	trans.requestType = msg.header.messageType
 	trans.sqlBatch = msg.sqlBatch
 	trans.procName = msg.procName
 	return nil
@@ -102,7 +95,6 @@ func (trans *transaction) onResponse(
 	dir uint8,
 	msg *message,
 ) error {
-	logp.Info("trans.onResponse()")
 
 	// todo: Add our information into Transaction (i.e. end time, bytes in etc)
 	// todo: Check that we have a request on the transaction. If we don't then return an error and dump this response
