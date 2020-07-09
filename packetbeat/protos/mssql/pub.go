@@ -3,7 +3,6 @@ package mssql
 import (
 	"github.com/elastic/beats/v7/libbeat/beat"
 	"github.com/elastic/beats/v7/libbeat/common"
-	"github.com/elastic/beats/v7/libbeat/logp"
 
 	"github.com/elastic/beats/v7/packetbeat/pb"
 	"github.com/elastic/beats/v7/packetbeat/protos"
@@ -18,8 +17,11 @@ type transPub struct {
 }
 
 func (pub *transPub) onTransaction(tran *transaction) error {
-	logp.Info("pub.onTransaction()")
 	if pub.results == nil {
+		return nil
+	}
+
+	if tran.requestType != sqlBatchMessage && tran.requestType == rpcMessage {
 		return nil
 	}
 
@@ -32,112 +34,54 @@ type table struct {
 }
 
 func (pub *transPub) createEvent(tran *transaction) beat.Event {
-	logp.Info("pub.createEvent()")
-
-	// todo: if we have no request type we should not create an event - not sure where this should live
 
 	evt, _ := pb.NewBeatEvent(tran.Ts.Ts)
-
-	// Create our SQL specific fields here
 	tran.Event(&evt)
-
 	fields := evt.Fields
 
+	// Add in SQL specific fields:
 	mssqlrequest := common.MapStr{
 		"request_type": getRequestTypeString(tran.requestType),
 	}
-
-	// Fairly arbitrary truncation:
-	// todo: only output sql_batch for the SQL batch request type
-	if len(tran.sqlBatch) > 500 {
-		mssqlrequest["sql_batch"] = tran.sqlBatch[0:497] + "..."
-	} else {
-		mssqlrequest["sql_batch"] = tran.sqlBatch
+	if tran.requestType == sqlBatchMessage {
+		if len(tran.sqlBatch) > 500 {
+			mssqlrequest["sql_batch"] = tran.sqlBatch[0:497] + "..."
+		} else {
+			mssqlrequest["sql_batch"] = tran.sqlBatch
+		}
 	}
-
-	// todo: Add in support for sendRequest & sendResponse config options
-
-	mssqlrequest["proc_name"] = tran.procName
+	if tran.requestType == rpcMessage {
+		mssqlrequest["proc_name"] = tran.procName
+	}
+	mssql := common.MapStr{
+		"request": mssqlrequest,
+	}
 
 	mssqlresponse := common.MapStr{
 		"rows_returned": tran.rowsReturned,
 		"result_sets":   tran.resultSets,
 	}
-
-	// mssql.event:
-	mssql := common.MapStr{
-		"request": mssqlrequest,
-	}
-
-	// todo: Need a better way to coordinate this. Only log responses for request types that we process
-	if tran.requestType == rpcMessage || tran.requestType == sqlBatchMessage {
-		mssql["response"] = mssqlresponse
-	}
+	mssql["response"] = mssqlresponse
 
 	fields["mssql"] = mssql
 
-	logp.Info("** published event: %v", evt)
+	/* todo:
+	The docs say raw request / response: https://www.elastic.co/guide/en/beats/packetbeat/current/common-protocol-options.html
+	- For a request should we use this to control the SQL Batch that we transmit?
+	- For a response do we want to parse out all of the row data? Or send the raw bytes?
+	I would have thought neither of these uses makes sense but need confirmation
 
-	// Look at the other packetbeat protos and decide which of the ECS fields to include. mysql.go has straight-forward examples
+	if pub.sendResponse {
+	}
 
-	// //pbf.Network.Transport = "tcp"
-	// fields := evt.Fields
-	// fields["type"] = "mssql" // Mandatory field (already added?)
-
-	// Code below here predominantly comes from the template - have a review
-
-	// status := common.OK_STATUS
-
-	// // resp_time in milliseconds
-	// responseTime := int32(resp.Ts.Sub(requ.Ts).Nanoseconds() / 1e6)
-
-	// src := &common.Endpoint{
-	// 	IP:      requ.Tuple.SrcIP.String(),
-	// 	Port:    requ.Tuple.SrcPort,
-	// 	Process: requ.CmdlineTuple.Src,
-	// }
-	// dst := &common.Endpoint{
-	// 	IP:      requ.Tuple.DstIP.String(),
-	// 	Port:    requ.Tuple.DstPort,
-	// 	Process: requ.CmdlineTuple.Dst,
-	// }
-
-	// fields := common.MapStr{
-	// 	"type":         "mssql",
-	// 	"status":       status,
-	// 	"responsetime": responseTime,
-	// 	// "bytes_in":     requ.Size,
-	// 	// "bytes_out":    resp.Size,
-	// 	"src":          src,
-	// 	"dst":          dst,
-	// 	"mssql.requestType": requ.requestType,
-	// }
+	if pub.sendRequest {
+	}
+	*/
 
 	// // add processing notes/errors to event
 	// if len(requ.Notes)+len(resp.Notes) > 0 {
 	// 	fields["notes"] = append(requ.Notes, resp.Notes...)
 	// }
-
-	// if pub.sendRequest {
-	// 	// fields["request"] =
-	// }
-	// if pub.sendResponse {
-	// 	// fields["response"] =
-	// }
-
-	// // pbf (packetbeat fields) - contains (some of) the packetbeat ecs fields
-
-	// pbf.SetSource(src)
-	// pbf.SetDestination(dst)
-	// evt.Fields = fields
-	// pbf.Event.Dataset = "mssql"
-
-	// logp.Info("** pbf.Network: %v", pbf.Network)
-
-	// pbf.Network.Transport = "tcp"
-	// pbf.Network.Protocol = pbf.Event.Dataset
-
-	// logp.Info("** event: %v", evt)
 
 	return evt
 }
@@ -169,10 +113,13 @@ func getRequestTypeString(messageType byte) string {
 }
 
 /*
-Experimentation:
+Possibly use the below for nested result sets (?)
+
+- columns in result sets
+- Params in RPC calls
 
 The below worked to produce nested objects but not sure how much value we get out of the granular breakdown of each result. It is
-possible to aggregate on the nested elements but doesn't seem to add much value?
+possible to aggregate on the nested elements but not sure of the value?
 
 	mapColumna1 := common.MapStr{"name": "id", "type": "int"}
 	mapColumna2 := common.MapStr{"name": "address", "type": "varchar(20)"}

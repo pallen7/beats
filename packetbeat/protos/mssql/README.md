@@ -15,11 +15,7 @@ Usage & implementation notes:
 ## TODO
  - Add support for remaining Data types
  - Add support for remaining Token types
- - Complete ECS support
  - Add tests
- - Go through todo list in code & remove logp.Info() calls - replace with debug and check logged errors
- - Handling of small (< 8 bytes) packets
- - Only publish selected data (i.e. don't publish all login/login responses)
  - Extra field support:
   - List column names / types in datasets?
   - List parameters on RPC input?

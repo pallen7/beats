@@ -15,6 +15,7 @@ import (
 type messageHeader struct {
 	messageType   byte
 	messageStatus byte
+	totalBytes    uint64
 }
 
 type parserConfig struct {
@@ -60,8 +61,8 @@ func (p *parser) init(
 
 func (p *parser) append(data []byte) error {
 
-	// Once validated then append data portion of the packet to the buffer to buffer
-	if _, err := p.buf.Write(data[headerLen:]); err != nil {
+	// Once validated then append data portion of the packet to the buffer - skip 8 header bytes
+	if _, err := p.buf.Write(data[8:]); err != nil {
 		return err
 	}
 
@@ -73,7 +74,7 @@ func (p *parser) append(data []byte) error {
 
 func (p *parser) feed(ts time.Time, data []byte, requestType byte, connInfo *sqlConnection) error {
 
-	if len(data) < headerLen {
+	if len(data) < 8 {
 		return nil
 	}
 
@@ -81,9 +82,11 @@ func (p *parser) feed(ts time.Time, data []byte, requestType byte, connInfo *sql
 		p.message = p.newMessage(ts)
 	}
 
-	p.parseHeader(data)
+	if err := p.parseHeader(data); err != nil {
+		return err
+	}
 
-	// This will append the data portion of the packet (minus the header)
+	// This will append the data portion of the packet to the buffer
 	if err := p.append(data); err != nil {
 		return err
 	}
@@ -136,6 +139,7 @@ func (p *parser) newMessage(ts time.Time) *message {
 		Message: applayer.Message{
 			Ts: ts,
 		},
+		header: &messageHeader{},
 	}
 }
 
@@ -209,9 +213,7 @@ func (p *parser) parse(requestType byte) error {
 }
 
 func parseTokenStream(p *parser) error {
-	// The below is effectively our parseTokenStream function:
 	for p.buf.Len() > 0 {
-		// We need to loop around the below and pull off each token as we go
 		tokenType, err := p.buf.ReadByte()
 		if err != nil {
 			return err
@@ -413,13 +415,6 @@ func isComplete(header *messageHeader) bool {
 	return header.messageStatus&eomStatus == eomStatus
 }
 
-func (p *parser) parseHeader(data []byte) {
-	p.message.header = &messageHeader{
-		messageType:   data[0],
-		messageStatus: data[1],
-	}
-}
-
 func (p *parser) advanceAllHeaders() error {
 	headerLen, err := p.readUInt32(littleEndian)
 	if err != nil {
@@ -492,20 +487,6 @@ func advanceRowValue(p *parser, dataType byte) error {
 	return nil
 }
 
-func readColumnName(p *parser) (columnName string, err error) {
-	colNameLen, err := p.buf.ReadByte()
-	if err != nil {
-		return
-	}
-
-	return p.readUCS2String(int(colNameLen) * 2)
-}
-
-const (
-	littleEndian = 0
-	bigEndian    = 1
-)
-
 func (p *parser) advanceVarbyte16() (err error) {
 	len, err := p.readUInt16(littleEndian)
 	if err != nil {
@@ -521,6 +502,52 @@ func (p *parser) advanceVarbyte32() (err error) {
 	}
 	return p.buf.Advance(int(len))
 }
+
+func (p *parser) parseHeader(data []byte) error {
+
+	var headBuf streambuf.Buffer
+	if _, err := headBuf.Write(data[:4]); err != nil {
+		return err
+	}
+
+	messageType, err := headBuf.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	messageStatus, err := headBuf.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	b := make([]byte, 2)
+	if _, err = headBuf.Read(b); err != nil {
+		return err
+	}
+	packetBytes := binary.BigEndian.Uint16(b)
+	totalBytes := p.message.header.totalBytes + uint64(packetBytes)
+
+	p.message.header = &messageHeader{
+		messageType:   messageType,
+		messageStatus: messageStatus,
+		totalBytes:    totalBytes,
+	}
+	return nil
+}
+
+func readColumnName(p *parser) (columnName string, err error) {
+	colNameLen, err := p.buf.ReadByte()
+	if err != nil {
+		return
+	}
+
+	return p.readUCS2String(int(colNameLen) * 2)
+}
+
+const (
+	littleEndian = 0
+	bigEndian    = 1
+)
 
 func (p *parser) readUInt16(endianness int) (v uint16, err error) {
 	b := make([]byte, 2)
@@ -551,7 +578,6 @@ func (p *parser) readUInt32(endianness int) (v uint32, err error) {
 }
 
 // The usage of utf-16 for decoding is similar to the following go sql database driver:
-// https://github.com/denisenkom/go-mssqldb/blob/06a60b6afbbc676d19209e339b20f8b685e7da34/tds.go#L419
 func (p *parser) readUCS2String(length int) (s string, err error) {
 	b := make([]byte, length)
 	if _, err = p.buf.Read(b); err != nil {
