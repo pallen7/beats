@@ -21,7 +21,7 @@ func (pub *transPub) onTransaction(tran *transaction) error {
 		return nil
 	}
 
-	if tran.requestType != sqlBatchMessage && tran.requestType == rpcMessage {
+	if tran.requestType != sqlBatchMessage && tran.requestType != rpcMessage {
 		return nil
 	}
 
@@ -82,7 +82,6 @@ func (pub *transPub) createEvent(tran *transaction) beat.Event {
 	// if len(requ.Notes)+len(resp.Notes) > 0 {
 	// 	fields["notes"] = append(requ.Notes, resp.Notes...)
 	// }
-
 	return evt
 }
 

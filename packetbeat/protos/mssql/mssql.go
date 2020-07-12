@@ -1,6 +1,7 @@
 package mssql
 
 import (
+	"sync"
 	"time"
 
 	"github.com/elastic/beats/v7/libbeat/common"
@@ -16,10 +17,16 @@ type mssqlPlugin struct {
 	parserConfig parserConfig
 	transConfig  transactionConfig
 	pub          transPub
+
+	// Due to the long lived nature of SQL connections we need to hold the sqlConnection data that's pertinent to parsing
+	// so that it doesn't get cleaned up with the TCP level connection data
+	sqlconns map[common.HashableIPPortTuple]*sqlConnection
+	sync.RWMutex
 }
 
 type sqlConnection struct {
-	columnEncryption bool
+	loginAck                bool
+	colEncryptionNegotiated bool
 }
 
 // Uni-directional tcp stream state for parsing messages.
@@ -29,9 +36,8 @@ type stream struct {
 
 // Application Layer tcp stream data to be stored on tcp connection context.
 type connection struct {
-	streams       [2]*stream
-	sqlConnection *sqlConnection
-	trans         transaction
+	streams [2]*stream
+	trans   transaction
 }
 
 var debugf = logp.MakeDebug("mssql")
@@ -64,6 +70,7 @@ func (tp *mssqlPlugin) init(results protos.Reporter, config *tdsConfig) error {
 	if err := tp.setFromConfig(config); err != nil {
 		return err
 	}
+	tp.sqlconns = make(map[common.HashableIPPortTuple]*sqlConnection)
 	tp.pub.results = results
 	return nil
 }
@@ -84,8 +91,7 @@ func (tp *mssqlPlugin) setFromConfig(config *tdsConfig) error {
 	return nil
 }
 
-// ConnectionTimeout returns the per stream connection timeout. Return <=0 to set default tcp module transaction timeout.
-// This should align with or exceed SQL Server timeout so that we can retain the ColumnEncryption info
+// ConnectionTimeout returns the per stream connection timeout.
 func (tp *mssqlPlugin) ConnectionTimeout() time.Duration {
 	return tp.transConfig.transactionTimeout
 }
@@ -105,6 +111,10 @@ func (tp *mssqlPlugin) Parse(
 ) protos.ProtocolData {
 	defer logp.Recover("Parse mssqlPlugin exception")
 
+	// Use the pkt tuple as the tcptuple includes the tcp stream id
+	ipPortTuple := getHashableTuple(pkt, dir)
+	sqlConn, sqlConnFound := tp.lookupSQLConnection(ipPortTuple)
+
 	conn := tp.ensureConnection(private)
 	st := conn.streams[dir]
 
@@ -120,11 +130,19 @@ func (tp *mssqlPlugin) Parse(
 	}
 
 	// todo: We can live with some parse errors and still want to create a transaction but with limited data (ECS type fields)
-	if err := st.parser.feed(pkt.Ts, pkt.Payload, conn.trans.requestType, conn.sqlConnection); err != nil {
+	if err := st.parser.feed(pkt.Ts, pkt.Payload, conn.trans.requestType, sqlConn); err != nil {
 		debugf("%v, dropping TCP stream for error in direction %v.", err, dir)
+		// todo: return nil (after updating the conn if required)
 		conn.streams[0] = nil
 		conn.streams[1] = nil
 		conn.trans.resetData()
+	}
+	// If a login has been acknowledged and we don't have these connection details then save them
+	if !sqlConnFound && sqlConn.loginAck {
+		debugf("login acknowledged for: %s (hashable:%v)", pkt.Tuple.String(), ipPortTuple)
+		tp.RWMutex.Lock()
+		tp.sqlconns[ipPortTuple] = sqlConn
+		tp.RWMutex.Unlock()
 	}
 	return conn
 }
@@ -147,10 +165,29 @@ func (tp *mssqlPlugin) GapInStream(tcptuple *common.TCPTuple, dir uint8,
 	return nil, false
 }
 
+func getHashableTuple(pkt *protos.Packet, dir uint8) common.HashableIPPortTuple {
+	if dir == tcp.TCPDirectionReverse {
+		debugf("reversing pkt tuple")
+		return pkt.Tuple.RevHashable()
+	}
+	return pkt.Tuple.Hashable()
+}
+
+func (tp *mssqlPlugin) lookupSQLConnection(ip common.HashableIPPortTuple) (*sqlConnection, bool) {
+	tp.RWMutex.RLock()
+	conn, found := tp.sqlconns[ip]
+	tp.RWMutex.RUnlock()
+	if !found {
+		debugf("sql connection not found, hashable ipporttuple:(%v)", ip)
+		conn = &sqlConnection{}
+	}
+	return conn, found
+}
+
 func (tp *mssqlPlugin) ensureConnection(private protos.ProtocolData) *connection {
 	conn := getConnection(private)
 	if conn == nil {
-		conn = &connection{sqlConnection: &sqlConnection{}}
+		conn = &connection{}
 		conn.trans.init(&tp.transConfig, tp.pub.onTransaction)
 	}
 	return conn

@@ -32,6 +32,7 @@ type transactionConfig struct {
 
 type transactionHandler func(*transaction) error
 
+// todo: remove
 func (trans *transaction) resetData() {
 	trans.Transaction = applayer.Transaction{}
 	trans.mssqlFields = mssqlFields{}

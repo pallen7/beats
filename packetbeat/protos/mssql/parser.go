@@ -9,6 +9,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/elastic/beats/v7/libbeat/common/streambuf"
+	"github.com/elastic/beats/v7/libbeat/logp"
 	"github.com/elastic/beats/v7/packetbeat/protos/applayer"
 )
 
@@ -227,8 +228,13 @@ func parseTokenStream(p *parser) error {
 			}
 
 			// If the client supports column encryption then skip over the CEK table
-			// We are only supporting the fact that COLUMNENCRYPTION has been negotiated. Not the presence of any encryption keys
-			if p.sqlConn.columnEncryption == true {
+			// We currently only support the fact that COLUMNENCRYPTION has been negotiated. Not the presence of any encryption keys
+			if !p.sqlConn.loginAck {
+				logp.Warn("No login acknowledgement. Parsing colmetadata with default: %t colEncryptionNegotiated setting")
+			}
+			debugf("parse colmetadata. columnEncryption: %t", p.sqlConn.colEncryptionNegotiated)
+
+			if p.sqlConn.colEncryptionNegotiated {
 				p.buf.Advance(2)
 			}
 
@@ -270,7 +276,8 @@ func parseTokenStream(p *parser) error {
 					break
 				}
 				if f == 0x04 {
-					p.sqlConn.columnEncryption = true
+					debugf("columnencryption negotiated")
+					p.sqlConn.colEncryptionNegotiated = true
 				}
 				// Now just advance the buffer
 				if err := p.advanceVarbyte32(); err != nil {
@@ -282,6 +289,8 @@ func parseTokenStream(p *parser) error {
 				return err
 			}
 		case loginAckToken:
+			debugf("login acknowledged")
+			p.sqlConn.loginAck = true
 			if err := p.advanceVarbyte16(); err != nil {
 				return err
 			}
@@ -374,9 +383,17 @@ func readColumnMetadata(p *parser, columnCount int) (colType []byte, err error) 
 		// See: 2.2.5.6 Type Info Rule Definition
 		// Note (DATE MUST NOT have a TYPE_VARLEN. The value is either 3 bytes or 0 bytes (null).)
 		switch colType[i] {
-		case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, timentype:
+		case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, timentype,
+			decimaltype, decimalntype, numerictype, numericntype,
+			binarytype, varbinarytype, datetime2ntype, chartype, datetimeoffsetntype:
 			// 1-byte length
 			if err = p.buf.Advance(1); err != nil {
+				return colType, err
+			}
+
+		case bigvarbinarytype, bigbinarytype:
+			// 2-byte length
+			if err = p.buf.Advance(2); err != nil {
 				return colType, err
 			}
 
@@ -392,9 +409,8 @@ func readColumnMetadata(p *parser, columnCount int) (colType []byte, err error) 
 				return colType, err
 			}
 
-		case decimaltype, numerictype, decimalntype, numericntype, datetime2ntype,
-			datetimeoffsetntype, chartype, binarytype, varbinarytype, bigvarbinarytype,
-			bigbinarytype, bigchartype, xmltype, udttype, texttype, imagetype, ntexttype:
+		case
+			bigchartype, xmltype, udttype, texttype, imagetype, ntexttype:
 
 			return colType, fmt.Errorf("Parse Metadata. Not implemented data type: x%x", colType[i])
 		}
@@ -425,31 +441,6 @@ func (p *parser) advanceAllHeaders() error {
 
 func advanceRowValue(p *parser, dataType byte) error {
 	switch dataType {
-	/*
-		todo:
-		// fixed length data types:
-		nulltype     = 0x1f
-
-		// variable length data types:
-		decimaltype         = 0x37
-		numerictype         = 0x3f
-		decimalntype        = 0x6a
-		numericntype        = 0x6c
-		datetime2ntype      = 0x2a
-		datetimeoffsetntype = 0x2b
-		chartype            = 0x2f
-		binarytype          = 0x2d
-		varbinarytype       = 0x25
-		bigvarbinarytype    = 0xa5
-		bigbinarytype       = 0xad
-		bigchartype         = 0xaf
-		xmltype             = 0xf1
-		udttype             = 0xf0
-		texttype            = 0x23
-		imagetype           = 0x22
-		ntexttype           = 0x63
-		ssvarianttype       = 0x62
-	*/
 	case int1type, bittype:
 		p.buf.Advance(1)
 	case int2type:
@@ -458,14 +449,16 @@ func advanceRowValue(p *parser, dataType byte) error {
 		p.buf.Advance(4)
 	case int8type, moneytype, datetimetype, flt8type:
 		p.buf.Advance(8)
-	case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, datentype, timentype:
+	case intntype, bitntype, datetimntype, fltntype, moneyntype, guidtype, datentype, timentype,
+		decimaltype, decimalntype, numerictype, numericntype,
+		binarytype, varbinarytype, datetime2ntype, chartype, datetimeoffsetntype:
 		// Variable length - specified by first byte
 		len, err := p.buf.ReadByte()
 		if err != nil {
 			return err
 		}
 		p.buf.Advance(int(len))
-	case varchartype, bigvarchartype, nvarchartype, nchartype:
+	case varchartype, bigvarchartype, nvarchartype, nchartype, bigvarbinarytype, bigbinarytype:
 		charCount, err := p.readUInt16(littleEndian)
 		if err != nil {
 			return err
@@ -532,6 +525,7 @@ func (p *parser) parseHeader(data []byte) error {
 		messageStatus: messageStatus,
 		totalBytes:    totalBytes,
 	}
+	//debugf("Parsed Header % x", p.message.header)
 	return nil
 }
 

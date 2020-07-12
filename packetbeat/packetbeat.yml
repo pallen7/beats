@@ -93,8 +93,7 @@ packetbeat.protocols:
 - type: mssql
   ports: [1433]
   
-  # The timeout for mssql connections has to exceed the timeout of the client if columnencryption is enabled
-  transaction_timeout: 60s
+  #transaction_timeout: 60s
 # - type: tls
 #   # Configure the ports where to listen for TLS traffic. You can disable
 #   # the TLS protocol by commenting out the list of ports.

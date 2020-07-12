@@ -13,14 +13,15 @@ Usage & implementation notes:
  - SSMS sends a CEKTable element even when COLUMNENCRYPTION is not being actively used on any columns (see section 2.2.7.4 of the spec) - _"This table MUST be sent when COLUMNENCRYPTION is negotiated by client and server and is turned on"_. This means that to parse the column metadata we need to capture whether COLUMNENCRYPTION is negotiated at logon and persist this data for the lifetime of the connection. The expectation is that a 0x0000 CEKTable will be present if column encryption has been negotiated.  
 
 ## TODO
+ - Add support for default connection ColumnEncryptionNegotiated setting (currently false)
  - Add support for remaining Data types
  - Add support for remaining Token types
  - Add tests
+ - In the case of errors still publish a result and populate error notes
  - Extra field support:
   - List column names / types in datasets?
   - List parameters on RPC input?
   - Return values?
-  - In the case of errors still publish a result and populate error notes
  - Fully support column encryption?
  
 ## Bugs:
